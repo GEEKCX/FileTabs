@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>icon\FileTabs.ico</ApplicationIcon>
+    <RootNamespace>FileTabs</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>FileTabs</Product>
+    <Description>Windows 多标签文件管理器，基于原生 Shell 视图。</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="Everything64.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- dahall fork: wraps IExplorerBrowser as a Windows Forms control -->
+    <PackageReference Include="WindowsAPICodePack-Shell" Version="1.1.1" />
+    <PackageReference Include="WPF-UI" Version="4.3.0" />
+  </ItemGroup>
+
+</Project>
+

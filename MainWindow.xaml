@@ -1,0 +1,443 @@
+<ui:FluentWindow x:Class="FileTabs.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="FileTabs" Height="640" Width="1000" MinHeight="320" MinWidth="520"
+        ExtendsContentIntoTitleBar="True"
+        WindowBackdropType="Mica"
+        FontFamily="{x:Static SystemFonts.MessageFontFamily}"
+        FontSize="{x:Static SystemFonts.MessageFontSize}"
+    UseLayoutRounding="True"
+    TextOptions.TextFormattingMode="Display"
+    TextOptions.TextRenderingMode="ClearType">
+    <Window.Resources>
+        <Style x:Key="TabCloseButton" TargetType="Button" BasedOn="{StaticResource Fluent.IconButton}">
+            <Setter Property="Width" Value="20"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Content" Value="&#xE711;"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" Background="Transparent" CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background" Value="#E81123"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- Rename popup: zero-size in layout, shown near the mouse -->
+        <Popup x:Name="RenamePopup" Placement="Mouse" StaysOpen="False" AllowsTransparency="True">
+            <Border Background="{DynamicResource Fluent.Surface}"
+                    BorderBrush="{DynamicResource Fluent.Border}"
+                    BorderThickness="1" Padding="6">
+                <StackPanel Orientation="Horizontal">
+                    <TextBox x:Name="RenameBox" Width="180" FontSize="12" KeyDown="RenameBox_KeyDown"/>
+                    <Button Content="确定" Width="48" Margin="6,0,0,0" Click="RenameOk_Click"/>
+                    <Button Content="取消" Width="48" Margin="4,0,0,0" Click="RenameCancel_Click"/>
+                </StackPanel>
+            </Border>
+        </Popup>
+
+        <!-- Native headline row: tabs sit next to the window title -->
+        <Border x:Name="BookmarkBar"
+                DockPanel.Dock="Top" Background="Transparent"
+                MouseDown="TabStripBackground_MouseDown"
+                PreviewMouseMove="TabStrip_PreviewMouseMove"
+                MouseLeftButtonUp="TabStrip_MouseLeftButtonUp">
+            <DockPanel Margin="8,4,8,0" LastChildFill="False">
+                <ItemsControl x:Name="TabStrip">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemContainerStyle>
+                        <Style TargetType="ContentPresenter">
+                            <Style.Triggers>
+                                <!-- Keep the active tab visually on top of its neighbors -->
+                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                    <Setter Property="Panel.ZIndex" Value="10"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ItemsControl.ItemContainerStyle>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                                    <Border x:Name="TabBorder" Height="30" MinWidth="100" MaxWidth="220"
+                                            WindowChrome.IsHitTestVisibleInChrome="True"
+                                    Margin="2,0,2,0" Padding="10,0,4,0"
+                                    Background="{DynamicResource Fluent.Background}"
+                                    MouseDown="TabItem_MouseDown"
+                                    ToolTip="{Binding Title}">
+                                    <Border.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="关闭" Click="TabClose_Click"/>
+                                            <MenuItem Header="关闭其他标签页" Click="TabCloseOthers_Click"/>
+                                            <MenuItem Header="关闭右侧标签页" Click="TabCloseRight_Click"/>
+                                            <Separator/>
+                                            <MenuItem Header="复制此标签页" Click="TabDuplicate_Click"/>
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
+                                <DockPanel>
+                                    <Button Style="{StaticResource TabCloseButton}" DockPanel.Dock="Right"
+                                            VerticalAlignment="Center"
+                                            Click="TabClose_Click"/>
+                                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
+                                               Margin="0,0,6,0" TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource Fluent.Text}"/>
+                                </DockPanel>
+                            </Border>
+                            <DataTemplate.Triggers>
+                                <Trigger SourceName="TabBorder" Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="TabBorder" Property="Background"
+                                            Value="{DynamicResource Fluent.Hover}"/>
+                                </Trigger>
+                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                    <Setter TargetName="TabBorder" Property="Background"
+                                            Value="{DynamicResource Fluent.Surface}"/>
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button x:Name="NewTabButton" Width="26" Height="26" Margin="6,2,0,0"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        FontSize="12" Content="&#xE710;" Cursor="Hand" Click="NewTab_Click"
+                        ToolTip="New tab (Ctrl+T)"
+                        WindowChrome.IsHitTestVisibleInChrome="True"/>
+                <!-- Hamburger menu pinned to the right end of the title row.
+                     ToggleButton + Popup instead of Button.ContextMenu: the
+                     popup always opens right below the button and the item
+                     click handlers live in the normal visual tree. -->
+                <ToggleButton x:Name="MenuButton" DockPanel.Dock="Right" Width="26" Height="26"
+                              WindowChrome.IsHitTestVisibleInChrome="True"
+                              FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                              FontSize="12" Content="&#xE700;" Cursor="Hand" ToolTip="菜单" Focusable="False">
+                    <ToggleButton.Template>
+                        <ControlTemplate TargetType="ToggleButton">
+                            <Border x:Name="bg" Background="Transparent" CornerRadius="4">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bg" Property="Background"
+                                            Value="{DynamicResource Fluent.Hover}"/>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="bg" Property="Background"
+                                            Value="{DynamicResource Fluent.Checked}"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </ToggleButton.Template>
+                </ToggleButton>
+                <!-- Custom caption buttons: ExtendsContentIntoTitleBar removes
+                     the system ones, so Win10/Win11 both rely on these. -->
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
+                    <Button Width="40" Height="32" Style="{StaticResource Fluent.IconButton}"
+                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                            FontSize="10" Content="&#xE921;" IsTabStop="False"
+                            WindowChrome.IsHitTestVisibleInChrome="True"
+                            Click="Minimize_Click" ToolTip="最小化"/>
+                    <Button Width="40" Height="32" Style="{StaticResource Fluent.IconButton}"
+                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                            FontSize="10" Content="&#xE922;" IsTabStop="False"
+                            WindowChrome.IsHitTestVisibleInChrome="True"
+                            Click="Maximize_Click" ToolTip="最大化/还原"/>
+                    <Button Width="40" Height="32" Style="{StaticResource Fluent.IconButton}"
+                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                            FontSize="10" Content="&#xE8BB;" IsTabStop="False"
+                            WindowChrome.IsHitTestVisibleInChrome="True"
+                            Click="Close_Click" ToolTip="关闭"/>
+                </StackPanel>
+                <Popup x:Name="MenuPopup" PlacementTarget="{Binding ElementName=MenuButton}"
+                       Placement="Bottom" StaysOpen="False" AllowsTransparency="True"
+                       PopupAnimation="Fade"
+                       IsOpen="{Binding IsChecked, ElementName=MenuButton, Mode=TwoWay}">
+                    <Border Background="{DynamicResource Fluent.Surface}"
+                            BorderBrush="{DynamicResource Fluent.Border}"
+                            BorderThickness="1" Padding="2" MinWidth="160">
+                        <StackPanel>
+                            <MenuItem Header="设置" Click="Settings_Click" Padding="10,4" MinWidth="150"/>
+                            <Separator/>
+                            <MenuItem Header="保存工作区" InputGestureText="Ctrl+S" Click="SaveWorkspace_Click" Padding="10,4" MinWidth="150"/>
+                            <MenuItem Header="打开工作区" InputGestureText="Ctrl+O" Click="OpenWorkspace_Click" Padding="10,4" MinWidth="150"/>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+
+            </DockPanel>
+        </Border>
+
+        <!-- Native command bar: compact glyph buttons + address bar -->
+        <Border DockPanel.Dock="Top" Background="Transparent"
+                BorderBrush="{DynamicResource Fluent.Border}"
+                BorderThickness="0,0,0,1" Padding="8,6">
+            <DockPanel>
+                <Button x:Name="BackButton" Width="32" Height="32"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        FontSize="14" Content="&#xE72B;"
+                        Background="Transparent" BorderThickness="0" Padding="0"
+                        Click="Back_Click" ToolTip="Back"/>
+                <Button x:Name="ForwardButton" Width="32" Height="32"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        FontSize="14" Content="&#xE72A;"
+                        Background="Transparent" BorderThickness="0" Padding="0"
+                        Click="Forward_Click" ToolTip="Forward"/>
+                <Button x:Name="UpButton" Width="32" Height="32"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        FontSize="14" Content="&#xE74A;"
+                        Background="Transparent" BorderThickness="0" Padding="0"
+                        Click="Up_Click" ToolTip="Up"/>
+                <Button x:Name="RefreshButton" Width="32" Height="32"
+                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                        FontSize="14" Content="&#xE72C;"
+                        Background="Transparent" BorderThickness="0" Padding="0"
+                        Click="Refresh_Click" ToolTip="刷新 (F5)"/>
+                <Grid DockPanel.Dock="Right" Width="260" Height="32" VerticalAlignment="Center">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="28"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="SearchBox" VerticalContentAlignment="Center"
+                             Grid.Column="0"
+                             ToolTip="Everything search"
+                             TextChanged="SearchBox_TextChanged" KeyDown="SearchBox_KeyDown"/>
+                    <Button Grid.Column="1" Style="{StaticResource Fluent.IconButton}"
+                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                            FontSize="12" Content="&#xE721;" IsTabStop="False"
+                            Click="SearchIcon_Click" ToolTip="搜索"/>
+                    <TextBlock Text="搜索" Margin="11,0,0,0"
+                               Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Foreground="{DynamicResource Fluent.TextSecondary}"
+                               IsHitTestVisible="False">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+                <Popup x:Name="SearchHintPopup" PlacementTarget="{Binding ElementName=SearchBox}" Placement="Bottom"
+                       StaysOpen="False" AllowsTransparency="True">
+                    <Border Background="#FFFFF4CE"
+                            BorderBrush="#FF9A9A9A"
+                            BorderThickness="1" Padding="6,3">
+                        <TextBlock x:Name="SearchHintText"
+                                   Foreground="{DynamicResource Fluent.Text}"/>
+                    </Border>
+                </Popup>
+
+                <!-- Breadcrumb path editor: inline path segments when not editing;
+                     swap in the plain TextBox on focus / Escape. -->
+                <Grid x:Name="AddressArea" VerticalAlignment="Center" Margin="8,0,0,0" MinWidth="120">
+                    <TextBox x:Name="AddressBox" Height="32" VerticalContentAlignment="Center"
+                             Visibility="Collapsed"
+                             KeyDown="AddressBox_KeyDown"/>
+                    <Border x:Name="BreadcrumbBar" Height="32"
+                            Background="{DynamicResource Fluent.Surface}"
+                            BorderBrush="{DynamicResource Fluent.Border}"
+                            BorderThickness="1" CornerRadius="4" Padding="6,0"
+                            MouseLeftButtonDown="BreadcrumbBar_MouseLeftButtonDown">
+                        <Border.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="复制路径" Click="CopyAddress_Click"/>
+                                <MenuItem Header="编辑地址" Click="EditAddress_Click"/>
+                            </ContextMenu>
+                        </Border.ContextMenu>
+                        <ItemsControl x:Name="BreadcrumbItems" VerticalAlignment="Center">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="›" Foreground="{DynamicResource Fluent.TextSecondary}"
+                                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="{Binding Label}"
+                                                   Foreground="{DynamicResource Fluent.Text}"
+                                                   VerticalAlignment="Center" Cursor="Hand"
+                                                   MouseLeftButtonDown="BreadcrumbPart_Click"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                </Grid>
+            </DockPanel>
+        </Border>
+
+        <!-- bookmark bar (drop target for files/folders) -->
+        <Border DockPanel.Dock="Top" Background="Transparent"
+                BorderBrush="{DynamicResource Fluent.Border}"
+                BorderThickness="0,0,0,1" Padding="6,3"
+                AllowDrop="True" DragOver="BookmarkBar_DragOver" Drop="BookmarkBar_Drop"
+                PreviewMouseMove="BookmarkStrip_PreviewMouseMove"
+                MouseLeftButtonUp="BookmarkStrip_MouseLeftButtonUp">
+            <DockPanel>
+                <TextBlock x:Name="BookmarkEmptyHint"
+                           Text="可拖动文档、软件、文件夹到此,点击快速打开"
+                           Foreground="{DynamicResource Fluent.TextSecondary}"
+                           VerticalAlignment="Center" Margin="4,0"/>
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <ItemsControl x:Name="BookmarkStrip">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Padding="8,3" Margin="1,0" Cursor="Hand"
+                                           MouseDown="Bookmark_MouseDown" ToolTip="{Binding Path}">
+                                    <TextBlock.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="打开" Click="BookmarkOpen_Click"/>
+                                            <MenuItem Header="在新标签页打开" Click="BookmarkOpenNewTab_Click"/>
+                                            <MenuItem Header="打开所在位置" Click="BookmarkOpenContaining_Click"/>
+                                            <Separator/>
+                                            <MenuItem Header="重命名" Click="BookmarkRename_Click"/>
+                                            <MenuItem Header="删除书签" Click="BookmarkDelete_Click"/>
+                                        </ContextMenu>
+                                    </TextBlock.ContextMenu>
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground"
+                                                    Value="{DynamicResource Fluent.Text}"/>
+                                            <Style.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background"
+                                                            Value="{DynamicResource Fluent.Hover}"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                    <TextBlock.Text>
+                                        <Binding Path="Name" StringFormat="{}{0}"/>
+                                    </TextBlock.Text>
+                                    <TextBlock.MaxWidth>160</TextBlock.MaxWidth>
+                                    <TextBlock.TextTrimming>CharacterEllipsis</TextBlock.TextTrimming>
+                                </TextBlock>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </DockPanel>
+        </Border>
+
+        <!-- Body: shell view on the left, Everything results panel on the right. -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="5"/>
+                <ColumnDefinition Width="0" MinWidth="0"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- one WindowsFormsHost per tab, stacked here; only active is visible -->
+            <Grid x:Name="ViewContainer" Grid.Column="0"/>
+
+            <GridSplitter x:Name="SearchPanelSplitter" Grid.Column="1"
+                          HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                          Background="Transparent" ShowsPreview="True"
+                          ResizeBehavior="PreviousAndNext" ResizeDirection="Columns"
+                          Visibility="Collapsed"/>
+
+            <Border x:Name="SearchResultsPanel" Grid.Column="2" Width="280"
+                    Background="{DynamicResource Fluent.Surface}"
+                    BorderBrush="{DynamicResource Fluent.Border}"
+                    BorderThickness="1,0,0,0" Visibility="Collapsed">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Padding="8,6"
+                            Background="{DynamicResource Fluent.Background}"
+                            BorderBrush="{DynamicResource Fluent.Border}"
+                            BorderThickness="0,0,0,1">
+                    <DockPanel LastChildFill="False">
+                            <Button DockPanel.Dock="Right" Style="{DynamicResource Fluent.IconButton}"
+                                    Width="24" Height="24"
+                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                    FontSize="10" Content="&#xE711;"
+                                    Click="SearchPanelClose_Click" ToolTip="关闭搜索结果"/>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="SearchResultCount"
+                                       Text="0 个结果"
+                                       Foreground="{DynamicResource Fluent.TextSecondary}"
+                                       VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <TextBlock Text="在 Everything 中打开"
+                                       Foreground="{DynamicResource Fluent.Text}"
+                                       VerticalAlignment="Center" Cursor="Hand"
+                                       MouseLeftButtonDown="OpenEverything_Click"/>
+                        </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <ListBox x:Name="SearchResults" BorderThickness="0" Background="Transparent"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             PreviewMouseLeftButtonDown="SearchResults_PreviewMouseDown"
+                             PreviewKeyDown="SearchResults_PreviewKeyDown">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Padding="8,6" Cursor="Hand" ToolTip="{Binding FullPath}">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}"
+                                                   Foreground="{DynamicResource Fluent.Text}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Path}"
+                                                   FontSize="{x:Static SystemFonts.MessageFontSize}"
+                                                   Foreground="{DynamicResource Fluent.TextSecondary}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock FontSize="{x:Static SystemFonts.MessageFontSize}"
+                                                   Foreground="{DynamicResource Fluent.TextSecondary}">
+                                            <TextBlock.Text>
+                                                <MultiBinding StringFormat="{}{0} · {1}">
+                                                    <Binding Path="SizeText"/>
+                                                    <Binding Path="ModifiedText"/>
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                        <ListBox.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="打开" Click="SearchResultOpen_Click"/>
+                                <MenuItem Header="打开所在文件夹" Click="SearchResultOpenContaining_Click"/>
+                                <MenuItem Header="复制完整路径" Click="SearchResultCopyPath_Click"/>
+                            </ContextMenu>
+                        </ListBox.ContextMenu>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </DockPanel>
+</ui:FluentWindow>
+
+
+
+
+
+
+
+

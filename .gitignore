@@ -1,0 +1,8 @@
+bin/
+obj/
+build_check*/
+node_modules/
+*.user
+*.tmp
+[Oo]bj/
+*.log
