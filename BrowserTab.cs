@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Forms.Integration;
+using Microsoft.WindowsAPICodePack.Controls;
 using Microsoft.WindowsAPICodePack.Controls.WindowsForms;
 using Microsoft.WindowsAPICodePack.Shell;
 
@@ -20,11 +21,25 @@ public sealed class BrowserTab : INotifyPropertyChanged
     public ExplorerBrowser Browser { get; }
     public WindowsFormsHost Host { get; }
 
+    /// <summary>
+    /// Raised after navigation or item changes; the handler re-reads
+    /// <see cref="Browser"/>.SelectedItems. This fires while the shell view
+    /// still holds its selection, so refreshing after the event dispatcher
+    /// drains would see an empty collection.
+    /// </summary>
+    public event EventHandler? SelectionStateChanged;
+
+    // ExplorerBrowser throws when ViewMode is assigned before the shell view
+    // exists; remember the request and push it once the handle is created.
+    private ExplorerBrowserViewMode _requestedViewMode = ExplorerBrowserViewMode.Auto;
+    private int? _requestedThumbnailSize;
+
     private readonly string _initialPath;
     private bool _initialNavigationDone;
 
     private string _title = "New tab";
     private bool _isActive;
+    private bool _isPinned;
 
     public string Title
     {
@@ -46,20 +61,40 @@ public sealed class BrowserTab : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Pinned tabs sit at the front of the strip, hide their close button and
+    /// ignore close shortcuts; the state travels with the saved session.
+    /// </summary>
+    public bool IsPinned
+    {
+        get => _isPinned;
+        set
+        {
+            _isPinned = value;
+            OnPropertyChanged();
+        }
+    }
+
     public BrowserTab(string initialPath)
     {
         _initialPath = initialPath;
 
         Browser = new ExplorerBrowser { Dock = System.Windows.Forms.DockStyle.Fill };
-        // Hide the shell's own command bar and navigation tree: the WPF chrome
-        // (breadcrumb bar + bookmark bar) replaces both, and the Win10 shell
-        // command bar clashes with the themed window. Shell view state still
+        // The WPF breadcrumb bar replaces the shell command bar by default.
+        // Keep the native navigation pane visible. Shell view state still
         // respects the user's Explorer folder-type settings.
         Browser.NavigationOptions.PaneVisibility.Commands =
-            Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
+            AppSettings.Current.ShowNativeCommandBar
+                ? Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Show
+                : Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
         Browser.NavigationOptions.PaneVisibility.Navigation =
-            Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
+            AppSettings.Current.ShowNativeSidebar
+                ? Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Show
+                : Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
         Browser.NavigationOptions.PaneVisibility.Preview = AppSettings.Current.ShowPreviewPane
+            ? Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Show
+            : Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
+        Browser.NavigationOptions.PaneVisibility.Details = AppSettings.Current.ShowDetailsPane
             ? Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Show
             : Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
         Host = new WindowsFormsHost { Child = Browser, Visibility = Visibility.Hidden };
@@ -69,7 +104,18 @@ public sealed class BrowserTab : INotifyPropertyChanged
             Title = !string.IsNullOrWhiteSpace(e.NewLocation?.Name)
                 ? e.NewLocation!.Name
                 : e.NewLocation?.ParsingName ?? string.Empty;
+            // Navigation rebuilds the DirectUI view; reapply without it the
+            // new shell surface follows the light system theme again.
+            ApplyShellTheme();
+            SelectionStateChanged?.Invoke(this, EventArgs.Empty);
         };
+        Browser.HandleCreated += (_, _) =>
+        {
+            ApplyShellTheme();
+            ApplyViewMode();
+        };
+        Browser.SelectionChanged += (_, _) => SelectionStateChanged?.Invoke(this, EventArgs.Empty);
+        Browser.ItemsChanged += (_, _) => SelectionStateChanged?.Invoke(this, EventArgs.Empty);
 
         // Navigate once the host is loaded and its HWND exists;
         // navigating before that can be dropped by the control.
@@ -80,6 +126,7 @@ public sealed class BrowserTab : INotifyPropertyChanged
     {
         if (_initialNavigationDone) return;
         _initialNavigationDone = true;
+        ApplyShellTheme();
         try
         {
             Browser.Navigate(ShellObject.FromParsingName(_initialPath));
@@ -89,6 +136,101 @@ public sealed class BrowserTab : INotifyPropertyChanged
             // Saved path may no longer exist; fall back instead of failing.
             Browser.Navigate(ShellObject.FromParsingName(ThisPc));
         }
+    }
+
+    public void ApplyShellTheme()
+    {
+        if (Browser.IsHandleCreated)
+        {
+            ThemeManager.ApplyShellTheme(Browser.Handle);
+        }
+    }
+
+    public void ApplyNativeSidebarVisibility(bool visible)
+    {
+        Browser.NavigationOptions.PaneVisibility.Navigation = visible
+            ? Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Show
+            : Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
+
+        // The shell only reads pane visibility when it creates the view, so
+        // re-navigate the current location to rebuild it with the new state.
+        RenavigateCurrentLocation();
+    }
+
+    public void ApplyNativeCommandBarVisibility(bool visible)
+    {
+        Browser.NavigationOptions.PaneVisibility.Commands = visible
+            ? Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Show
+            : Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
+
+        // Like the other pane states, Commands is applied while the shell
+        // creates a view, so force a fresh navigation to make it visible
+        // before the current tab is re-created.
+        RenavigateCurrentLocation();
+    }
+
+    /// <summary>
+    /// The shell only reads pane visibility when it creates the view, and
+    /// Details is not part of the options object once the view exists, so a
+    /// re-navigation rebuilds the surface with the new state.
+    /// </summary>
+    public void ApplyDetailsPaneVisibility(bool visible)
+    {
+        Browser.NavigationOptions.PaneVisibility.Details = visible
+            ? Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Show
+            : Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
+
+        RenavigateCurrentLocation();
+    }
+
+    public void ApplyPreviewPaneVisibility(bool visible)
+    {
+        Browser.NavigationOptions.PaneVisibility.Preview = visible
+            ? Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Show
+            : Microsoft.WindowsAPICodePack.Controls.PaneVisibilityState.Hide;
+
+        RenavigateCurrentLocation();
+    }
+
+    private void RenavigateCurrentLocation()
+    {
+        if (Browser.NavigationLog.CurrentLocation is not { } location) return;
+
+        // ExplorerBrowser treats a navigation to the current location as a
+        // no-op unless AlwaysNavigate is set. Pane visibility is queried while
+        // the shell creates the view, so the same-location navigation must be
+        // forced for a toggle to take effect.
+        var alwaysNavigate = Browser.NavigationOptions.AlwaysNavigate;
+        Browser.NavigationOptions.AlwaysNavigate = true;
+        try
+        {
+            Browser.Navigate(location);
+        }
+        finally
+        {
+            Browser.NavigationOptions.AlwaysNavigate = alwaysNavigate;
+        }
+    }
+
+    public void SetViewMode(ExplorerBrowserViewMode mode, int? thumbnailSize = null)
+    {
+        _requestedViewMode = mode;
+        _requestedThumbnailSize = thumbnailSize;
+        if (!Browser.IsHandleCreated) return;
+        ApplyViewMode();
+    }
+
+    private void ApplyViewMode()
+    {
+        if (!Browser.IsHandleCreated) return;
+        // Auto lets each folder use its own saved template; forcing a mode on
+        // every navigation would override the user's per-folder view.
+        if (_requestedViewMode == ExplorerBrowserViewMode.Auto) return;
+        if (_requestedThumbnailSize is { } size)
+        {
+            Browser.ContentOptions.ThumbnailSize = size;
+        }
+        Browser.ContentOptions.ViewMode = _requestedViewMode;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

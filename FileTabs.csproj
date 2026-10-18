@@ -10,6 +10,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>icon\FileTabs.ico</ApplicationIcon>
     <RootNamespace>FileTabs</RootNamespace>
+    <!-- Program.cs owns Main so the registry switches can run before WPF
+         exists and without creating the main window. -->
+    <StartupObject>FileTabs.Program</StartupObject>
     <Version>1.0.0</Version>
     <Product>FileTabs</Product>
     <Description>Windows 多标签文件管理器，基于原生 Shell 视图。</Description>

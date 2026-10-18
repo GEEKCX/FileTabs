@@ -4,32 +4,33 @@
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="FileTabs" Height="640" Width="1000" MinHeight="320" MinWidth="520"
         ExtendsContentIntoTitleBar="True"
-        WindowBackdropType="Mica"
+        WindowBackdropType="None"
+        Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
         FontFamily="{x:Static SystemFonts.MessageFontFamily}"
         FontSize="{x:Static SystemFonts.MessageFontSize}"
     UseLayoutRounding="True"
     TextOptions.TextFormattingMode="Display"
     TextOptions.TextRenderingMode="ClearType">
     <Window.Resources>
+        <!-- Tab close glyph: invisible until hovered, red on hover like the
+             native caption close button. -->
         <Style x:Key="TabCloseButton" TargetType="Button" BasedOn="{StaticResource Fluent.IconButton}">
             <Setter Property="Width" Value="20"/>
             <Setter Property="Height" Value="20"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
-            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="10"/>
-            <Setter Property="Content" Value="&#xE711;"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bg" Background="Transparent" CornerRadius="8">
+                        <Border x:Name="bg" Background="Transparent" CornerRadius="4">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bg" Property="Background" Value="#E81123"/>
+                                <Setter TargetName="bg" Property="Background"
+                                        Value="{DynamicResource PaletteRedBrush}"/>
                                 <Setter Property="Foreground" Value="White"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
@@ -42,9 +43,9 @@
     <DockPanel>
         <!-- Rename popup: zero-size in layout, shown near the mouse -->
         <Popup x:Name="RenamePopup" Placement="Mouse" StaysOpen="False" AllowsTransparency="True">
-            <Border Background="{DynamicResource Fluent.Surface}"
-                    BorderBrush="{DynamicResource Fluent.Border}"
-                    BorderThickness="1" Padding="6">
+            <Border Background="{DynamicResource ContextMenuBackground}"
+                    BorderBrush="{DynamicResource ContextMenuBorderBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="6">
                 <StackPanel Orientation="Horizontal">
                     <TextBox x:Name="RenameBox" Width="180" FontSize="12" KeyDown="RenameBox_KeyDown"/>
                     <Button Content="确定" Width="48" Margin="6,0,0,0" Click="RenameOk_Click"/>
@@ -53,211 +54,350 @@
             </Border>
         </Popup>
 
-        <!-- Native headline row: tabs sit next to the window title -->
-        <Border x:Name="BookmarkBar"
-                DockPanel.Dock="Top" Background="Transparent"
-                MouseDown="TabStripBackground_MouseDown"
-                PreviewMouseMove="TabStrip_PreviewMouseMove"
-                MouseLeftButtonUp="TabStrip_MouseLeftButtonUp">
-            <DockPanel Margin="8,4,8,0" LastChildFill="False">
-                <ItemsControl x:Name="TabStrip">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal"/>
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemContainerStyle>
-                        <Style TargetType="ContentPresenter">
-                            <Style.Triggers>
-                                <!-- Keep the active tab visually on top of its neighbors -->
-                                <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                    <Setter Property="Panel.ZIndex" Value="10"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ItemsControl.ItemContainerStyle>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                                    <Border x:Name="TabBorder" Height="30" MinWidth="100" MaxWidth="220"
-                                            WindowChrome.IsHitTestVisibleInChrome="True"
-                                    Margin="2,0,2,0" Padding="10,0,4,0"
-                                    Background="{DynamicResource Fluent.Background}"
-                                    MouseDown="TabItem_MouseDown"
-                                    ToolTip="{Binding Title}">
-                                    <Border.ContextMenu>
-                                        <ContextMenu>
-                                            <MenuItem Header="关闭" Click="TabClose_Click"/>
-                                            <MenuItem Header="关闭其他标签页" Click="TabCloseOthers_Click"/>
-                                            <MenuItem Header="关闭右侧标签页" Click="TabCloseRight_Click"/>
-                                            <Separator/>
-                                            <MenuItem Header="复制此标签页" Click="TabDuplicate_Click"/>
-                                        </ContextMenu>
-                                    </Border.ContextMenu>
-                                <DockPanel>
-                                    <Button Style="{StaticResource TabCloseButton}" DockPanel.Dock="Right"
-                                            VerticalAlignment="Center"
-                                            Click="TabClose_Click"/>
-                                    <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
-                                               Margin="0,0,6,0" TextTrimming="CharacterEllipsis"
-                                               Foreground="{DynamicResource Fluent.Text}"/>
-                                </DockPanel>
-                            </Border>
-                            <DataTemplate.Triggers>
-                                <Trigger SourceName="TabBorder" Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="TabBorder" Property="Background"
-                                            Value="{DynamicResource Fluent.Hover}"/>
-                                </Trigger>
-                                <DataTrigger Binding="{Binding IsActive}" Value="True">
-                                    <Setter TargetName="TabBorder" Property="Background"
-                                            Value="{DynamicResource Fluent.Surface}"/>
-                                </DataTrigger>
-                            </DataTemplate.Triggers>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-                <Button x:Name="NewTabButton" Width="26" Height="26" Margin="6,2,0,0"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                        FontSize="12" Content="&#xE710;" Cursor="Hand" Click="NewTab_Click"
-                        ToolTip="New tab (Ctrl+T)"
-                        WindowChrome.IsHitTestVisibleInChrome="True"/>
-                <!-- Hamburger menu pinned to the right end of the title row.
-                     ToggleButton + Popup instead of Button.ContextMenu: the
-                     popup always opens right below the button and the item
-                     click handlers live in the normal visual tree. -->
-                <ToggleButton x:Name="MenuButton" DockPanel.Dock="Right" Width="26" Height="26"
-                              WindowChrome.IsHitTestVisibleInChrome="True"
-                              FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                              FontSize="12" Content="&#xE700;" Cursor="Hand" ToolTip="菜单" Focusable="False">
-                    <ToggleButton.Template>
-                        <ControlTemplate TargetType="ToggleButton">
-                            <Border x:Name="bg" Background="Transparent" CornerRadius="4">
-                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                            </Border>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True">
-                                    <Setter TargetName="bg" Property="Background"
-                                            Value="{DynamicResource Fluent.Hover}"/>
-                                </Trigger>
-                                <Trigger Property="IsChecked" Value="True">
-                                    <Setter TargetName="bg" Property="Background"
-                                            Value="{DynamicResource Fluent.Checked}"/>
-                                </Trigger>
-                            </ControlTemplate.Triggers>
-                        </ControlTemplate>
-                    </ToggleButton.Template>
-                </ToggleButton>
-                <!-- Custom caption buttons: ExtendsContentIntoTitleBar removes
-                     the system ones, so Win10/Win11 both rely on these. -->
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
-                    <Button Width="40" Height="32" Style="{StaticResource Fluent.IconButton}"
-                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                            FontSize="10" Content="&#xE921;" IsTabStop="False"
-                            WindowChrome.IsHitTestVisibleInChrome="True"
-                            Click="Minimize_Click" ToolTip="最小化"/>
-                    <Button Width="40" Height="32" Style="{StaticResource Fluent.IconButton}"
-                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                            FontSize="10" Content="&#xE922;" IsTabStop="False"
-                            WindowChrome.IsHitTestVisibleInChrome="True"
-                            Click="Maximize_Click" ToolTip="最大化/还原"/>
-                    <Button Width="40" Height="32" Style="{StaticResource Fluent.IconButton}"
-                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                            FontSize="10" Content="&#xE8BB;" IsTabStop="False"
-                            WindowChrome.IsHitTestVisibleInChrome="True"
-                            Click="Close_Click" ToolTip="关闭"/>
+        <!-- Menu popup: zero-size, so it must not be the DockPanel's last child
+             (LastChildFill would hand the remaining space to it). -->
+        <Popup x:Name="MenuPopup" PlacementTarget="{Binding ElementName=MenuButton}"
+               Placement="Bottom" StaysOpen="False" AllowsTransparency="True"
+               PopupAnimation="Fade"
+               IsOpen="{Binding IsChecked, ElementName=MenuButton, Mode=TwoWay}">
+            <Border Background="{DynamicResource ContextMenuBackground}"
+                    BorderBrush="{DynamicResource ContextMenuBorderBrush}"
+                    BorderThickness="1" CornerRadius="8" Padding="4" MinWidth="160">
+                <StackPanel>
+                    <MenuItem Header="设置" Click="Settings_Click" Padding="10,4" MinWidth="150"/>
+                    <Separator/>
+                    <MenuItem Header="保存工作区" InputGestureText="Ctrl+S" Click="SaveWorkspace_Click" Padding="10,4" MinWidth="150"/>
+                    <MenuItem Header="打开工作区" InputGestureText="Ctrl+O" Click="OpenWorkspace_Click" Padding="10,4" MinWidth="150"/>
                 </StackPanel>
-                <Popup x:Name="MenuPopup" PlacementTarget="{Binding ElementName=MenuButton}"
-                       Placement="Bottom" StaysOpen="False" AllowsTransparency="True"
-                       PopupAnimation="Fade"
-                       IsOpen="{Binding IsChecked, ElementName=MenuButton, Mode=TwoWay}">
-                    <Border Background="{DynamicResource Fluent.Surface}"
-                            BorderBrush="{DynamicResource Fluent.Border}"
-                            BorderThickness="1" Padding="2" MinWidth="160">
-                        <StackPanel>
-                            <MenuItem Header="设置" Click="Settings_Click" Padding="10,4" MinWidth="150"/>
-                            <Separator/>
-                            <MenuItem Header="保存工作区" InputGestureText="Ctrl+S" Click="SaveWorkspace_Click" Padding="10,4" MinWidth="150"/>
-                            <MenuItem Header="打开工作区" InputGestureText="Ctrl+O" Click="OpenWorkspace_Click" Padding="10,4" MinWidth="150"/>
-                        </StackPanel>
-                    </Border>
-                </Popup>
+            </Border>
+        </Popup>
 
-            </DockPanel>
-        </Border>
+        <!-- Title bar: WPF UI's TitleBar draws and wires the caption buttons
+             (hover fills, close red) and hit-tests the caption row itself, so
+             the tab strip lives in its Header slot. The empty area right of
+             the tabs stays a real caption: drag, double-click maximize and
+             the system menu all keep working. -->
+        <ui:TitleBar DockPanel.Dock="Top" Height="40" ShowHelp="False"
+                     Background="{DynamicResource SolidBackgroundFillColorBaseAltBrush}">
+            <ui:TitleBar.Header>
+                <Border x:Name="TabBar" Background="Transparent" Margin="10,0,4,0"
+                        MouseDown="TabStripBackground_MouseDown"
+                        MouseRightButtonUp="TabStrip_RightButtonUp"
+                        PreviewMouseMove="TabStrip_PreviewMouseMove"
+                        MouseLeftButtonUp="TabStrip_MouseLeftButtonUp">
+                    <StackPanel Orientation="Horizontal">
+                        <ToggleButton x:Name="MenuButton" Width="26" Height="26"
+                                      Margin="0,0,12,0" VerticalAlignment="Center"
+                                      Focusable="False" ToolTip="菜单">
+                            <ui:SymbolIcon Symbol="Navigation20" FontSize="14"/>
+                        </ToggleButton>
+                        <ItemsControl x:Name="TabStrip">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Style.Triggers>
+                                        <!-- Keep the active tab visually on top of its neighbors -->
+                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                            <Setter Property="Panel.ZIndex" Value="10"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid x:Name="TabRoot" Height="36" MinWidth="200" MaxWidth="320"
+                                          Margin="0,4,0,0" VerticalAlignment="Bottom"
+                                          Background="Transparent"
+                                          MouseDown="TabItem_MouseDown"
+                                          MouseRightButtonUp="TabItem_RightButtonUp"
+                                          ToolTip="{Binding Title}">
+                                        <Grid.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="固定标签页" IsCheckable="True"
+                                                          IsChecked="{Binding IsPinned, Mode=TwoWay}"
+                                                          Click="TabPin_Click"/>
+                                                <Separator/>
+                                                <MenuItem Header="关闭" Click="TabClose_Click"/>
+                                                <MenuItem Header="关闭其他标签页" Click="TabCloseOthers_Click"/>
+                                                <MenuItem Header="关闭右侧标签页" Click="TabCloseRight_Click"/>
+                                                <Separator/>
+                                                <MenuItem Header="复制此标签页" Click="TabDuplicate_Click"/>
+                                            </ContextMenu>
+                                        </Grid.ContextMenu>
+                                        <Border x:Name="TabBorder" Padding="0"
+                                                CornerRadius="8,8,0,0"
+                                                Background="{DynamicResource SolidBackgroundFillColorSecondaryBrush}">
+                                            <DockPanel Margin="12,0,6,0">
+                                                <Button x:Name="CloseButton"
+                                                        Style="{StaticResource TabCloseButton}" DockPanel.Dock="Right"
+                                                        VerticalAlignment="Center"
+                                                        Click="TabClose_Click">
+                                                    <ui:SymbolIcon Symbol="Dismiss16" FontSize="10"/>
+                                                </Button>
+                                                <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
+                                                           Margin="0,0,6,0" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                            </DockPanel>
+                                        </Border>
+                                        <!-- The scoops hang outside the tab body (negative margin), so
+                                             every tab gets the same inverted bottom radius. A neighbour's
+                                             scoop that lands on the active tab is hidden underneath it:
+                                             the active tab is drawn last (Panel.ZIndex=10) with an opaque
+                                             background. -->
+                                        <Path x:Name="ScoopLeft" Width="8" Height="8"
+                                              HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                              Margin="-8,0,0,0"
+                                              IsHitTestVisible="False"
+                                              Fill="{Binding Background, ElementName=TabBorder}"
+                                              Data="M 8,0 A 8,8 0 0 1 0,8 L 8,8 Z"/>
+                                        <Path x:Name="ScoopRight" Width="8" Height="8"
+                                              HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                              Margin="0,0,-8,0"
+                                              IsHitTestVisible="False"
+                                              Fill="{Binding Background, ElementName=TabBorder}"
+                                              Data="M 0,0 A 8,8 0 0 0 8,8 L 0,8 Z"/>
+                                    </Grid>
+                                    <DataTemplate.Triggers>
+                                        <!-- Inactive tabs are light gray; hover brightens one
+                                             step, the active tab is the brightest surface. -->
+                                        <Trigger SourceName="TabRoot" Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="TabBorder" Property="Background"
+                                                    Value="{DynamicResource SolidBackgroundFillColorBaseBrush}"/>
+                                        </Trigger>
+                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                            <Setter TargetName="TabBorder" Property="Background"
+                                                    Value="{DynamicResource SolidBackgroundFillColorQuarternaryBrush}"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsPinned}" Value="True">
+                                            <Setter TargetName="CloseButton" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </DataTemplate.Triggers>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                                        <Button x:Name="NewTabButton" Width="34" Height="34" Padding="0"
+                                                Style="{StaticResource Fluent.IconButton}"
+                                Margin="14,0,0,0" VerticalAlignment="Bottom"
+                                Click="NewTab_Click" ToolTip="New tab (Ctrl+T)">
+                            <ui:SymbolIcon Symbol="Add20" FontSize="14"/>
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </ui:TitleBar.Header>
+        </ui:TitleBar>
 
         <!-- Native command bar: compact glyph buttons + address bar -->
         <Border DockPanel.Dock="Top" Background="Transparent"
-                BorderBrush="{DynamicResource Fluent.Border}"
+                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
                 BorderThickness="0,0,0,1" Padding="8,6">
             <DockPanel>
-                <Button x:Name="BackButton" Width="32" Height="32"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                        FontSize="14" Content="&#xE72B;"
-                        Background="Transparent" BorderThickness="0" Padding="0"
-                        Click="Back_Click" ToolTip="Back"/>
-                <Button x:Name="ForwardButton" Width="32" Height="32"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                        FontSize="14" Content="&#xE72A;"
-                        Background="Transparent" BorderThickness="0" Padding="0"
-                        Click="Forward_Click" ToolTip="Forward"/>
-                <Button x:Name="UpButton" Width="32" Height="32"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                        FontSize="14" Content="&#xE74A;"
-                        Background="Transparent" BorderThickness="0" Padding="0"
-                        Click="Up_Click" ToolTip="Up"/>
-                <Button x:Name="RefreshButton" Width="32" Height="32"
-                        FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                        FontSize="14" Content="&#xE72C;"
-                        Background="Transparent" BorderThickness="0" Padding="0"
-                        Click="Refresh_Click" ToolTip="刷新 (F5)"/>
-                <Grid DockPanel.Dock="Right" Width="260" Height="32" VerticalAlignment="Center">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="28"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="SearchBox" VerticalContentAlignment="Center"
-                             Grid.Column="0"
-                             ToolTip="Everything search"
-                             TextChanged="SearchBox_TextChanged" KeyDown="SearchBox_KeyDown"/>
-                    <Button Grid.Column="1" Style="{StaticResource Fluent.IconButton}"
-                            FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                            FontSize="12" Content="&#xE721;" IsTabStop="False"
-                            Click="SearchIcon_Click" ToolTip="搜索"/>
-                    <TextBlock Text="搜索" Margin="11,0,0,0"
-                               Grid.Column="0"
-                               VerticalAlignment="Center"
-                               Foreground="{DynamicResource Fluent.TextSecondary}"
-                               IsHitTestVisible="False">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Visibility" Value="Collapsed"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Text, ElementName=SearchBox}" Value="">
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                </Grid>
+                <ui:Button x:Name="BackButton" Width="32" Height="32" Padding="0"
+                        Margin="0,0,6,0" Appearance="Transparent" Click="Back_Click" ToolTip="后退">
+                    <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="14"/>
+                </ui:Button>
+                <ui:Button x:Name="ForwardButton" Width="32" Height="32" Padding="0"
+                        Margin="0,0,6,0" Appearance="Transparent" Click="Forward_Click" ToolTip="前进">
+                    <ui:SymbolIcon Symbol="ArrowRight24" FontSize="14"/>
+                </ui:Button>
+                <ui:Button x:Name="UpButton" Width="32" Height="32" Padding="0"
+                        Margin="0,0,6,0" Appearance="Transparent" Click="Up_Click" ToolTip="上一级">
+                    <ui:SymbolIcon Symbol="ArrowUp24" FontSize="14"/>
+                </ui:Button>
+                <ui:Button x:Name="RefreshButton" Width="32" Height="32" Padding="0"
+                        Margin="0,0,6,0" Appearance="Transparent" Click="Refresh_Click" ToolTip="刷新 (F5)">
+                    <ui:SymbolIcon Symbol="ArrowClockwise24" FontSize="14"/>
+                </ui:Button>
+                <!-- Native shell views (This PC, Libraries) place their own
+                     command bar inside the view; this is the same set of
+                     view choices in one place for every folder. -->
+                <ui:Button x:Name="ViewModeButton" Width="32" Height="32" Padding="0"
+                        Margin="0,0,6,0" Appearance="Transparent"
+                        Click="ViewModeButton_Click" ToolTip="视图">
+                    <ui:Button.ContextMenu>
+                        <ContextMenu x:Name="ViewMenu" Placement="Bottom"
+                                     PlacementTarget="{Binding ElementName=ViewModeButton}"
+                                     Opened="ViewMenu_Opened">
+                            <MenuItem Header="详细信息" Tag="Details" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                            <MenuItem Header="列表" Tag="List" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                            <MenuItem Header="小图标" Tag="SmallIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                            <MenuItem Header="中图标" Tag="Icon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                            <MenuItem Header="大图标" Tag="LargeIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                            <MenuItem Header="超大图标" Tag="ExtraLargeIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                            <MenuItem Header="平铺" Tag="Tile" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                            <MenuItem Header="内容" Tag="Content" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                            <Separator/>
+                            <MenuItem x:Name="ShowDetailsPaneMenuItem"
+                                      Header="详细信息窗格"
+                                      IsCheckable="True"
+                                      Checked="ShowDetailsPane_Changed"
+                                      Unchecked="ShowDetailsPane_Changed"/>
+                            <MenuItem x:Name="ShowPreviewPaneMenuItem"
+                                      Header="预览窗格"
+                                      IsCheckable="True"
+                                      Checked="ShowPreviewPane_Changed"
+                                      Unchecked="ShowPreviewPane_Changed"/>
+                        </ContextMenu>
+                    </ui:Button.ContextMenu>
+                    <ui:SymbolIcon Symbol="PanelRight20" FontSize="14"/>
+                </ui:Button>
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ui:Button x:Name="ToolbarMenuButton" Width="32" Height="32" Padding="0"
+                               Margin="0,0,6,0" Appearance="Transparent"
+                               Click="ToolbarMenuButton_Click"
+                               ToolTip="更多操作">
+                        <!-- The menu must hang off an element's ContextMenu property:
+                             a ContextMenu placed directly in a panel's children throws
+                             "ContextMenu cannot have a logical or visual parent". -->
+                        <ui:Button.ContextMenu>
+                            <ContextMenu x:Name="ToolbarMenu" Placement="Bottom"
+                                         PlacementTarget="{Binding ElementName=ToolbarMenuButton}">
+                                <MenuItem x:Name="ReopenClosedTabMenuItem"
+                                          Header="撤销关闭标签页"
+                                          InputGestureText="Ctrl+Shift+T"
+                                          Click="ReopenClosedTab_Click"
+                                          Padding="10,4" MinWidth="180"/>
+                                <Separator/>
+                                <MenuItem x:Name="ShowBookmarkBarMenuItem"
+                                          Header="显示书签栏"
+                                          IsCheckable="True"
+                                          Checked="ShowBookmarkBar_Changed"
+                                          Unchecked="ShowBookmarkBar_Changed"
+                                          Padding="10,4" MinWidth="180"/>
+                                <MenuItem x:Name="ShowNativeSidebarMenuItem"
+                                          Header="显示原生侧边栏"
+                                          IsCheckable="True"
+                                          Checked="ShowNativeSidebar_Changed"
+                                          Unchecked="ShowNativeSidebar_Changed"
+                                          Padding="10,4" MinWidth="180"/>
+                                <MenuItem x:Name="ShowNativeCommandBarMenuItem"
+                                          Header="显示原生命令栏"
+                                          IsCheckable="True"
+                                          Checked="ShowNativeCommandBar_Changed"
+                                          Unchecked="ShowNativeCommandBar_Changed"
+                                          Padding="10,4" MinWidth="180"/>
+                                <Separator/>
+                                <MenuItem x:Name="OpenTerminalMenuItem"
+                                          Header="在终端打开"
+                                          Click="OpenTerminal_Click"
+                                          Padding="10,4" MinWidth="180"/>
+                            </ContextMenu>
+                        </ui:Button.ContextMenu>
+                        <ui:SymbolIcon Symbol="MoreHorizontal20" FontSize="14"/>
+                    </ui:Button>
+                    <ui:Button x:Name="DropPointButton" Width="32" Height="32" Padding="0"
+                            Margin="0,0,6,0" Appearance="Transparent"
+                            Click="DropPointButton_Click"
+                            ToolTip="DropPoint 拖放中转 (Shift+CapsLock)">
+                        <ui:SymbolIcon Symbol="Drag24" FontSize="14"/>
+                    </ui:Button>
+                    <ui:Button x:Name="RecentLocationsButton" Width="32" Height="32" Padding="0"
+                            Margin="0,0,6,0" Appearance="Transparent"
+                            Click="RecentLocationsButton_Click"
+                            ToolTip="最近访问 (Ctrl+H)">
+                        <ui:SymbolIcon Symbol="History20" FontSize="14"/>
+                    </ui:Button>
+                    <ui:TextBox x:Name="SearchBox"
+                                Width="240" Height="32"
+                                IconPlacement="Left"
+                                Icon="{ui:SymbolIcon Symbol=Search20, FontSize=14}"
+                                PlaceholderText="搜索"
+                                ClearButtonEnabled="True"
+                                VerticalContentAlignment="Center"
+                                ToolTip="Everything search"
+                                TextChanged="SearchBox_TextChanged" KeyDown="SearchBox_KeyDown"/>
+                    <ui:Button x:Name="SearchToggleButton" Width="32" Height="32" Padding="0"
+                               Appearance="Transparent"
+                               Background="Transparent"
+                               MouseOverBackground="Transparent"
+                               MouseOverBorderBrush="Transparent"
+                               PressedBackground="Transparent"
+                               PressedBorderBrush="Transparent"
+                               Click="SearchToggleButton_Click"
+                               ToolTip="搜索 (Ctrl+F)">
+                        <ui:SymbolIcon Symbol="Search20" FontSize="14"/>
+                    </ui:Button>
+                </StackPanel>
+                <Popup x:Name="RecentLocationsPopup" PlacementTarget="{Binding ElementName=RecentLocationsButton}"
+                       Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
+                    <Border Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                            BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8" Width="360" Padding="6">
+                        <StackPanel>
+                            <ListBox x:Name="RecentLocationsList" BorderThickness="0" Background="Transparent"
+                                     PreviewMouseLeftButtonUp="RecentLocationsList_PreviewMouseLeftButtonUp"
+                                     PreviewKeyDown="RecentLocationsList_PreviewKeyDown">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="6,4" ToolTip="{Binding Path}">
+                                            <TextBlock Text="{Binding DisplayTitle}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                            <TextBlock Text="{Binding VisitedAtText}"
+                                                       FontSize="{x:Static SystemFonts.MessageFontSize}"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <ui:Button Content="打开历史记录" HorizontalAlignment="Stretch" Margin="6,6,0,0"
+                                       Click="RecentLocationsOpenFullPage_Click"/>
+                        </StackPanel>
+                    </Border>
+                </Popup>
                 <Popup x:Name="SearchHintPopup" PlacementTarget="{Binding ElementName=SearchBox}" Placement="Bottom"
                        StaysOpen="False" AllowsTransparency="True">
-                    <Border Background="#FFFFF4CE"
-                            BorderBrush="#FF9A9A9A"
-                            BorderThickness="1" Padding="6,3">
+                    <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+                            BorderBrush="{DynamicResource SystemFillColorCautionBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="6,3">
                         <TextBlock x:Name="SearchHintText"
-                                   Foreground="{DynamicResource Fluent.Text}"/>
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                    </Border>
+                </Popup>
+                <Popup x:Name="AddressSuggestPopup" PlacementTarget="{Binding ElementName=AddressBox}"
+                       Placement="Bottom" StaysOpen="True" AllowsTransparency="True">
+                    <Border x:Name="AddressSuggestContent"
+                            Width="{Binding ActualWidth, ElementName=AddressBox}"
+                            Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                            BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="8" Padding="4">
+                        <ListBox x:Name="AddressSuggestList" BorderThickness="0" Background="Transparent"
+                                 MaxHeight="360"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 PreviewMouseLeftButtonUp="AddressSuggestList_PreviewMouseLeftButtonUp">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="6,3" ToolTip="{Binding Path}">
+                                        <TextBlock Text="{Binding Name}"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Path}"
+                                                   FontSize="{x:Static SystemFonts.MessageFontSize}"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                     </Border>
                 </Popup>
 
                 <!-- Breadcrumb path editor: inline path segments when not editing;
                      swap in the plain TextBox on focus / Escape. -->
-                <Grid x:Name="AddressArea" VerticalAlignment="Center" Margin="8,0,0,0" MinWidth="120">
+                <Grid x:Name="AddressArea" VerticalAlignment="Center" Margin="0,0,6,0" MinWidth="120">
                     <TextBox x:Name="AddressBox" Height="32" VerticalContentAlignment="Center"
                              Visibility="Collapsed"
+                             TextChanged="AddressBox_TextChanged"
+                             LostKeyboardFocus="AddressBox_LostKeyboardFocus"
+                             PreviewKeyDown="AddressBox_PreviewKeyDown"
                              KeyDown="AddressBox_KeyDown"/>
                     <Border x:Name="BreadcrumbBar" Height="32"
-                            Background="{DynamicResource Fluent.Surface}"
-                            BorderBrush="{DynamicResource Fluent.Border}"
+                            Background="{DynamicResource ControlFillColorDefaultBrush}"
+                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
                             BorderThickness="1" CornerRadius="4" Padding="6,0"
                             MouseLeftButtonDown="BreadcrumbBar_MouseLeftButtonDown">
                         <Border.ContextMenu>
@@ -275,10 +415,10 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="›" Foreground="{DynamicResource Fluent.TextSecondary}"
+                                        <TextBlock Text="›" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                                    VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <TextBlock Text="{Binding Label}"
-                                                   Foreground="{DynamicResource Fluent.Text}"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"
                                                    VerticalAlignment="Center" Cursor="Hand"
                                                    MouseLeftButtonDown="BreadcrumbPart_Click"/>
                                     </StackPanel>
@@ -291,8 +431,8 @@
         </Border>
 
         <!-- bookmark bar (drop target for files/folders) -->
-        <Border DockPanel.Dock="Top" Background="Transparent"
-                BorderBrush="{DynamicResource Fluent.Border}"
+        <Border x:Name="BookmarkBar" DockPanel.Dock="Top" Background="Transparent"
+                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
                 BorderThickness="0,0,0,1" Padding="6,3"
                 AllowDrop="True" DragOver="BookmarkBar_DragOver" Drop="BookmarkBar_Drop"
                 PreviewMouseMove="BookmarkStrip_PreviewMouseMove"
@@ -300,7 +440,7 @@
             <DockPanel>
                 <TextBlock x:Name="BookmarkEmptyHint"
                            Text="可拖动文档、软件、文件夹到此,点击快速打开"
-                           Foreground="{DynamicResource Fluent.TextSecondary}"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                            VerticalAlignment="Center" Margin="4,0"/>
                 <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                     <ItemsControl x:Name="BookmarkStrip">
@@ -326,11 +466,11 @@
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
                                             <Setter Property="Foreground"
-                                                    Value="{DynamicResource Fluent.Text}"/>
+                                                    Value="{DynamicResource TextFillColorPrimaryBrush}"/>
                                             <Style.Triggers>
                                                 <Trigger Property="IsMouseOver" Value="True">
                                                     <Setter Property="Background"
-                                                            Value="{DynamicResource Fluent.Hover}"/>
+                                                            Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
                                                 </Trigger>
                                             </Style.Triggers>
                                         </Style>
@@ -348,45 +488,133 @@
             </DockPanel>
         </Border>
 
+        <!-- Selection summary: the shell already draws its own bottom bar for
+             the item count, but it cannot show total bytes for a selection.
+             This row appears only while something is selected, so the two do
+             not stack into a duplicate "N items" strip. -->
+        <Border x:Name="StatusBar" DockPanel.Dock="Bottom" Height="26"
+                Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0"
+                Visibility="Collapsed">
+            <DockPanel Margin="12,0" LastChildFill="True">
+                <TextBlock x:Name="StatusHintText" DockPanel.Dock="Right"
+                           Margin="12,0,0,0"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+            </DockPanel>
+        </Border>
+
         <!-- Body: shell view on the left, Everything results panel on the right. -->
-        <Grid>
+        <Grid x:Name="BodyGrid">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="5"/>
                 <ColumnDefinition Width="0" MinWidth="0"/>
             </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition x:Name="BodyRow" Height="*"/>
+                <RowDefinition x:Name="HistoryRow" Height="0"/>
+            </Grid.RowDefinitions>
 
             <!-- one WindowsFormsHost per tab, stacked here; only active is visible -->
             <Grid x:Name="ViewContainer" Grid.Column="0"/>
 
+            <!-- Access history drawer: takes the bottom 20% of the body,
+                 leaving the active file view visible above it. -->
+            <Border x:Name="HistoryPanel" Grid.Row="1" Grid.Column="0"
+                    Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                    BorderThickness="0,1,0,0"
+                    Visibility="Collapsed">
+                <DockPanel Margin="12,8">
+                    <Border DockPanel.Dock="Top" Padding="0,0,0,6"
+                            BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                            BorderThickness="0,0,0,1">
+                        <DockPanel>
+                            <ui:Button DockPanel.Dock="Right" Width="28" Height="28" Padding="0"
+                                       Appearance="Transparent" Click="HistoryPageClose_Click"
+                                       ToolTip="关闭历史记录">
+                                <ui:SymbolIcon Symbol="Dismiss20" FontSize="12"/>
+                            </ui:Button>
+                            <ui:TextBox x:Name="HistorySearchBox" DockPanel.Dock="Right"
+                                        Width="240" Height="28" Margin="8,0,0,0"
+                                        VerticalContentAlignment="Center"
+                                        PlaceholderText="搜索历史记录"
+                                        TextChanged="HistorySearchBox_TextChanged"
+                                        KeyDown="HistorySearchBox_KeyDown"/>
+                            <TextBlock Text="历史记录" FontSize="16" FontWeight="SemiBold"
+                                       VerticalAlignment="Center"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                        </DockPanel>
+                    </Border>
+                    <Grid>
+                        <ListBox x:Name="HistoryItems" BorderThickness="0" Background="Transparent"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 PreviewMouseLeftButtonUp="HistoryItems_PreviewMouseLeftButtonUp"
+                                 PreviewKeyDown="HistoryItems_PreviewKeyDown">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="8,6">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding DisplayTitle}"
+                                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <TextBlock FontSize="{x:Static SystemFonts.MessageFontSize}"
+                                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0} · {1}">
+                                                        <Binding Path="Path"/>
+                                                        <Binding Path="VisitedAtText"/>
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <TextBlock x:Name="HistoryEmptyHint" Text="暂无历史记录"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Visibility="Collapsed"/>
+                    </Grid>
+                </DockPanel>
+            </Border>
+
             <GridSplitter x:Name="SearchPanelSplitter" Grid.Column="1"
+                          Grid.RowSpan="2"
                           HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                           Background="Transparent" ShowsPreview="True"
                           ResizeBehavior="PreviousAndNext" ResizeDirection="Columns"
                           Visibility="Collapsed"/>
 
             <Border x:Name="SearchResultsPanel" Grid.Column="2" Width="280"
-                    Background="{DynamicResource Fluent.Surface}"
-                    BorderBrush="{DynamicResource Fluent.Border}"
+                    Grid.RowSpan="2"
+                    Background="{DynamicResource SolidBackgroundFillColorQuarternaryBrush}"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
                     BorderThickness="1,0,0,0" Visibility="Collapsed">
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Padding="8,6"
-                            Background="{DynamicResource Fluent.Background}"
-                            BorderBrush="{DynamicResource Fluent.Border}"
+                            Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                            BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
                             BorderThickness="0,0,0,1">
                     <DockPanel LastChildFill="False">
-                            <Button DockPanel.Dock="Right" Style="{DynamicResource Fluent.IconButton}"
-                                    Width="24" Height="24"
-                                    FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
-                                    FontSize="10" Content="&#xE711;"
-                                    Click="SearchPanelClose_Click" ToolTip="关闭搜索结果"/>
+                            <ui:Button DockPanel.Dock="Right" Width="24" Height="24" Padding="0"
+                                    Appearance="Transparent"
+                                    Click="SearchPanelClose_Click" ToolTip="关闭搜索结果">
+                                <ui:SymbolIcon Symbol="Dismiss20" FontSize="11"/>
+                            </ui:Button>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock x:Name="SearchResultCount"
                                        Text="0 个结果"
-                                       Foreground="{DynamicResource Fluent.TextSecondary}"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                        VerticalAlignment="Center" Margin="0,0,12,0"/>
                             <TextBlock Text="在 Everything 中打开"
-                                       Foreground="{DynamicResource Fluent.Text}"
+                                       Foreground="{DynamicResource TextFillColorPrimaryBrush}"
                                        VerticalAlignment="Center" Cursor="Hand"
                                        MouseLeftButtonDown="OpenEverything_Click"/>
                         </StackPanel>
@@ -401,14 +629,14 @@
                                 <Border Padding="8,6" Cursor="Hand" ToolTip="{Binding FullPath}">
                                     <StackPanel>
                                         <TextBlock Text="{Binding Name}"
-                                                   Foreground="{DynamicResource Fluent.Text}"
+                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"
                                                    TextTrimming="CharacterEllipsis"/>
                                         <TextBlock Text="{Binding Path}"
                                                    FontSize="{x:Static SystemFonts.MessageFontSize}"
-                                                   Foreground="{DynamicResource Fluent.TextSecondary}"
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                                    TextTrimming="CharacterEllipsis"/>
                                         <TextBlock FontSize="{x:Static SystemFonts.MessageFontSize}"
-                                                   Foreground="{DynamicResource Fluent.TextSecondary}">
+                                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}">
                                             <TextBlock.Text>
                                                 <MultiBinding StringFormat="{}{0} · {1}">
                                                     <Binding Path="SizeText"/>
@@ -431,13 +659,6 @@
                 </DockPanel>
             </Border>
         </Grid>
+
     </DockPanel>
 </ui:FluentWindow>
-
-
-
-
-
-
-
-

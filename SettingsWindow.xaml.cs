@@ -1,8 +1,10 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Interop;
 using Microsoft.WindowsAPICodePack.Shell;
 // WinForms (UseWindowsForms) and WPF both define MessageBox; WPF wins here.
 using MessageBox = System.Windows.MessageBox;
+using Screen = System.Windows.Forms.Screen;
 
 namespace FileTabs;
 
@@ -15,6 +17,7 @@ public partial class SettingsWindow : Window
     public SettingsWindow()
     {
         InitializeComponent();
+        Loaded += (_, _) => FitToWorkArea();
         ThemeCombo.SelectedIndex = AppSettings.Current.Theme switch
         {
             nameof(AppTheme.Light) => 0,
@@ -22,9 +25,55 @@ public partial class SettingsWindow : Window
             _ => 2,
         };
         NewTabPathBox.Text = AppSettings.Current.NewTabPath;
-        ShowBookmarkBarCheckBox.IsChecked = AppSettings.Current.ShowBookmarkBar;
+        StartWithWindowsCheckBox.IsChecked = StartupRegistration.IsEnabled();
+        RestoreLastSessionCheckBox.IsChecked = AppSettings.Current.RestoreLastSession;
         ShowPreviewPaneCheckBox.IsChecked = AppSettings.Current.ShowPreviewPane;
+        ShowNativeCommandBarCheckBox.IsChecked = AppSettings.Current.ShowNativeCommandBar;
         SearchSortByNameCheckBox.IsChecked = AppSettings.Current.SearchSortByName;
+        DropPointEnabledCheckBox.IsChecked = AppSettings.Current.DropPointEnabled;
+        CaptureExplorerCheckBox.IsChecked = AppSettings.Current.CaptureExplorer;
+        RedirectFoldersCheckBox.IsChecked = NativeRedirect.IsInstalled();
+        TerminalCombo.SelectedIndex = AppSettings.Current.Terminal switch
+        {
+            nameof(TerminalKind.PowerShell) => 1,
+            nameof(TerminalKind.CommandPrompt) => 2,
+            _ => 0,
+        };
+    }
+
+    private void FitToWorkArea()
+    {
+        var screen = Screen.FromHandle(new WindowInteropHelper(this).Handle);
+        var source = PresentationSource.FromVisual(this);
+        if (source?.CompositionTarget is null) return;
+
+        // WorkingArea is in physical pixels; WPF sizes are device-independent.
+        var transform = source.CompositionTarget.TransformFromDevice;
+        var topLeft = transform.Transform(
+            new System.Windows.Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
+        var bottomRight = transform.Transform(
+            new System.Windows.Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
+        var availableHeight = bottomRight.Y - topLeft.Y;
+        var availableWidth = bottomRight.X - topLeft.X;
+
+        MaxHeight = Math.Max(240, availableHeight - 24);
+        MaxWidth = Math.Max(320, availableWidth - 24);
+        if (ActualHeight > MaxHeight)
+        {
+            Height = MaxHeight;
+        }
+        if (ActualWidth > MaxWidth)
+        {
+            Width = MaxWidth;
+        }
+
+        // CenterOwner can land off-screen when the owner is partly off-screen.
+        var minLeft = topLeft.X + 12;
+        var minTop = topLeft.Y + 12;
+        var maxLeft = Math.Max(minLeft, bottomRight.X - ActualWidth - 12);
+        var maxTop = Math.Max(minTop, bottomRight.Y - ActualHeight - 12);
+        Left = Math.Clamp(Left, minLeft, maxLeft);
+        Top = Math.Clamp(Top, minTop, maxTop);
     }
 
     private void Browse_Click(object sender, RoutedEventArgs e)
@@ -67,9 +116,37 @@ public partial class SettingsWindow : Window
         }
 
         AppSettings.Current.NewTabPath = input;
-        AppSettings.Current.ShowBookmarkBar = ShowBookmarkBarCheckBox.IsChecked == true;
         AppSettings.Current.ShowPreviewPane = ShowPreviewPaneCheckBox.IsChecked == true;
+        AppSettings.Current.ShowNativeCommandBar = ShowNativeCommandBarCheckBox.IsChecked == true;
         AppSettings.Current.SearchSortByName = SearchSortByNameCheckBox.IsChecked == true;
+        AppSettings.Current.CaptureExplorer = CaptureExplorerCheckBox.IsChecked == true;
+        AppSettings.Current.DropPointEnabled = DropPointEnabledCheckBox.IsChecked == true;
+        AppSettings.Current.RestoreLastSession = RestoreLastSessionCheckBox.IsChecked == true;
+        AppSettings.Current.Terminal = TerminalCombo.SelectedIndex switch
+        {
+            1 => nameof(TerminalKind.PowerShell),
+            2 => nameof(TerminalKind.CommandPrompt),
+            _ => nameof(TerminalKind.WindowsTerminal),
+        };
+        var startWithWindows = StartWithWindowsCheckBox.IsChecked == true;
+        if (startWithWindows)
+        {
+            StartupRegistration.Enable();
+        }
+        else
+        {
+            StartupRegistration.Disable();
+        }
+        var wantRedirect = RedirectFoldersCheckBox.IsChecked == true;
+        if (wantRedirect && !NativeRedirect.IsInstalled())
+        {
+            NativeRedirect.Install();
+        }
+        else if (!wantRedirect && NativeRedirect.IsInstalled())
+        {
+            NativeRedirect.Uninstall();
+        }
+        AppSettings.Current.RedirectFolders = wantRedirect;
         var theme = ThemeCombo.SelectedIndex switch
         {
             0 => AppTheme.Light,
@@ -79,6 +156,7 @@ public partial class SettingsWindow : Window
         AppSettings.Current.Theme = theme.ToString();
         ThemeManager.Apply(theme);
         AppStorage.SaveSettings(AppSettings.Current);
+        (System.Windows.Application.Current as App)?.DropPoints.ApplySettings();
         DialogResult = true;
         Close();
     }

@@ -6,3 +6,7 @@ node_modules/
 *.tmp
 [Oo]bj/
 *.log
+tools/
+installer/
+buildtmp/
+*.png

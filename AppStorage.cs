@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text.Encodings.Web;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Text.Json;
 
 namespace FileTabs;
@@ -16,6 +17,8 @@ public sealed class SessionData
     public List<string> Tabs { get; set; } = new();
     public int ActiveIndex { get; set; }
     public List<string> RecentlyClosed { get; set; } = new();
+    // Parallel to Tabs; kept separate so older session files still load.
+    public List<bool> Pinned { get; set; } = new();
 }
 
 public sealed class Workspace
@@ -24,6 +27,12 @@ public sealed class Workspace
     public List<string> Tabs { get; set; } = new();
     public int ActiveIndex { get; set; }
     public DateTime LastUsedAt { get; set; }
+}
+
+public sealed class RecentLocation
+{
+    public string Path { get; set; } = "";
+    public DateTime VisitedAt { get; set; }
 }
 
 /// <summary>
@@ -40,17 +49,59 @@ public sealed class AppSettings
     // Interface options persisted with the rest of the settings.
     public bool ShowBookmarkBar { get; set; } = true;
 
+    public bool ShowNativeSidebar { get; set; } = true;
+
+    public bool ShowNativeCommandBar { get; set; }
+
     public string Theme { get; set; } = nameof(AppTheme.FollowSystem);
 
     public bool SearchSortByName { get; set; }
 
     public bool ShowPreviewPane { get; set; }
 
+    public bool ShowDetailsPane { get; set; } = true;
+
+    /// <summary>Turn on the Explorer takeover (phase 1: window hook only).</summary>
+    public bool CaptureExplorer { get; set; }
+
+    /// <summary>
+    /// Phase 2 registry redirect: launch FileTabs.exe for double-clicked
+    /// folders and drives. Only touches HKCU\Software\Classes; no admin
+    /// rights needed and fully reversible.
+    /// </summary>
+    public bool RedirectFolders { get; set; }
+
+    /// <summary>Enable the DropPoint drag-and-drop staging pad.</summary>
+    public bool DropPointEnabled { get; set; } = true;
+
+    /// <summary>Restore the previous tab session when the app starts.</summary>
+    public bool RestoreLastSession { get; set; } = true;
+
+    /// <summary>Terminal used by the "open in terminal" action.</summary>
+    public string Terminal { get; set; } = nameof(TerminalKind.WindowsTerminal);
+
+    /// <summary>
+    /// Last normal window placement. NaN until the user has moved or resized
+    /// the window, so the first run keeps the XAML default centered position.
+    /// </summary>
+    public double WindowLeft { get; set; } = double.NaN;
+    public double WindowTop { get; set; } = double.NaN;
+    public double WindowWidth { get; set; } = 1000;
+    public double WindowHeight { get; set; } = 640;
+    public bool WindowMaximized { get; set; }
+
     private static AppSettings Load()
     {
         var settings = AppStorage.LoadSettings();
         return settings ?? new AppSettings();
     }
+}
+
+public enum TerminalKind
+{
+    WindowsTerminal,
+    PowerShell,
+    CommandPrompt,
 }
 
 /// <summary>
@@ -69,6 +120,8 @@ public static class AppStorage
     {
         WriteIndented = true,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        // WindowLeft/Top use NaN as the "no saved placement yet" sentinel.
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
     };
 
     // UTF-8 without BOM keeps the file compact and diff-friendly.
@@ -163,6 +216,36 @@ public static class AppStorage
         }
     }
 
+    public static List<RecentLocation> LoadRecentLocations()
+    {
+        var file = Path.Combine(DataDirectory, "history.json");
+        if (!File.Exists(file)) return new List<RecentLocation>();
+        try
+        {
+            return JsonSerializer.Deserialize<List<RecentLocation>>(File.ReadAllText(file), JsonOptions)
+                   ?? new List<RecentLocation>();
+        }
+        catch (JsonException)
+        {
+            ArchiveCorruptFile(file);
+            Log("history.json is corrupt; ignored.");
+            return new List<RecentLocation>();
+        }
+    }
+
+    public static void SaveRecentLocations(IEnumerable<RecentLocation> recentLocations)
+    {
+        try
+        {
+            WriteFileAtomically(Path.Combine(DataDirectory, "history.json"),
+                JsonSerializer.Serialize(recentLocations, JsonOptions));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"SaveRecentLocations failed: {ex.Message}");
+        }
+    }
+
     public static AppSettings? LoadSettings()
     {
         var file = Path.Combine(DataDirectory, "settings.json");
@@ -182,6 +265,13 @@ public static class AppStorage
 
     public static void SaveSettings(AppSettings settings)
     {
+        // Window placement starts as NaN until the user's first move. It can
+        // also still be NaN while startup restores it, and System.Text.Json
+        // refuses to write NaN, so write 0 ("no saved position") instead.
+        var windowLeft = settings.WindowLeft;
+        var windowTop = settings.WindowTop;
+        if (!double.IsFinite(windowLeft)) settings.WindowLeft = 0;
+        if (!double.IsFinite(windowTop)) settings.WindowTop = 0;
         try
         {
             WriteFileAtomically(Path.Combine(DataDirectory, "settings.json"),
@@ -190,6 +280,11 @@ public static class AppStorage
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Log($"SaveSettings failed: {ex.Message}");
+        }
+        finally
+        {
+            settings.WindowLeft = windowLeft;
+            settings.WindowTop = windowTop;
         }
     }
 

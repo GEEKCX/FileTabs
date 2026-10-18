@@ -6,7 +6,10 @@ Windows 多标签文件管理器——直接承载 **Windows 原生 Explorer 视
 
 ## 下载
 
-从 [Releases](https://github.com/GEEKCX/FileTabs/releases) 下载 `FileTabs-x.y.z-win-x64.exe`，单文件、免安装、自包含 .NET 运行时，下载后直接双击运行。
+从 [Releases](https://github.com/GEEKCX/FileTabs/releases) 下载两种发布之一：
+
+- **安装版（推荐）**：`FileTabs-x.y.z-setup.exe`，Inno Setup per-user 安装到 `%LOCALAPPDATA%\Programs\FileTabs`，无 UAC 弹窗，包含开始菜单和桌面快捷方式，卸载时自动恢复原生 Explorer 的文件夹打开方式。
+- **便携版**：`FileTabs-x.y.z-win-x64.exe`，单文件、免安装、自包含 .NET 运行时，下载后直接双击运行。
 
 ## 功能
 
@@ -46,6 +49,9 @@ dotnet build FileTabs.csproj
 
 # Release（自包含单文件，输出到 bin\Release\net10.0-windows\win-x64\publish\）
 .\publish.ps1
+
+# Inno Setup 安装包（输出到 installer\FileTabs-x.y.z-setup.exe）
+& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss
 ```
 
 Everything 集成走官方 [Everything SDK](https://www.voidtools.com/forum/viewtopic.php?t=30541)（`Everything64.dll`，MIT 协议），Windows 上能正常调用 Everything 的 IPC。

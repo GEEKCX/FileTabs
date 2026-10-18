@@ -1,10 +1,10 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Interop;
 using System.Windows.Shell;
 using System.Windows.Threading;
@@ -18,6 +18,7 @@ using DragEventArgs = System.Windows.DragEventArgs;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MessageBox = System.Windows.MessageBox;
 using Button = System.Windows.Controls.Button;
+using MenuItem = System.Windows.Controls.MenuItem;
 using TextBlock = System.Windows.Controls.TextBlock;
 using StackPanel = System.Windows.Controls.StackPanel;
 using Clipboard = System.Windows.Clipboard;
@@ -30,8 +31,10 @@ namespace FileTabs;
 
 public partial class MainWindow : FluentWindow
 {
+    private readonly ExplorerCaptureService _captureService = new();
     private readonly ObservableCollection<BrowserTab> _tabs = new();
     private readonly ObservableCollection<Bookmark> _bookmarks = new();
+    private readonly List<RecentLocation> _recentLocations = new();
     private BrowserTab? _active;
     private Bookmark? _renameTarget;
     private BrowserTab? _dragTab;
@@ -44,6 +47,12 @@ public partial class MainWindow : FluentWindow
     private List<string> _recentlyClosed = new();
     private bool _everythingAvailable = true;
     private DispatcherTimer? _sessionSaveTimer;
+    private Rect _normalWindowBounds;
+    private List<AddressSuggestion> _addressSuggestions = new();
+    private CancellationTokenSource? _addressSuggestionsCts;
+    private bool _addressSuggestionChosen;
+    private bool _isAddressEditing;
+    private bool _isApplyingAppearanceSettings;
 
     public MainWindow()
     {
@@ -54,7 +63,14 @@ public partial class MainWindow : FluentWindow
             BookmarkEmptyHint.Visibility = _bookmarks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
         Loaded += (_, _) => Startup();
+        ToolbarMenu.Opened += (_, _) => SyncToolbarMenuState();
+        SizeChanged += (_, _) => UpdateSearchLayout();
+        SizeChanged += (_, _) => TrackNormalWindowBounds();
+        LocationChanged += (_, _) => TrackNormalWindowBounds();
+        StateChanged += (_, _) => TrackNormalWindowBounds();
         Closing += (_, _) => FlushSessionBeforeClose();
+        Closing += (_, _) => SaveWindowPlacement();
+        Closed += (_, _) => _captureService.Dispose();
         Closed += (_, _) => _isClosing = true;
         PreviewKeyDown += OnPreviewKeyDown;
         SourceInitialized += (_, _) => ((HwndSource?)PresentationSource.FromVisual(this))?.AddHook(WndProcHook);
@@ -63,20 +79,29 @@ public partial class MainWindow : FluentWindow
         // Coalesce rapid save triggers (navigation, tab switch, drag, close).
         _sessionSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _sessionSaveTimer.Tick += (_, _) => SaveCurrentSession();
+        _captureService.NewExplorerWindow += OnExplorerWindowCaptured;
+        RestoreWindowPlacement();
     }
 
     protected override void OnSourceInitialized(EventArgs e)
     {
         // FluentWindow removes the caption (CaptionHeight=0) so Mica can bleed
-        // through. Restore a 40px caption band so the empty area of the tab
-        // strip drags/maximizes like a normal title bar, while the interactive
-        // controls opt back in via IsHitTestVisibleInChrome in XAML.
+        // through. Our ui:TitleBar now owns caption hit testing (drag,
+        // double-click maximize, system menu) through its own WM_NCHITTEST
+        // hook, so the chrome only keeps the resize border.
         base.OnSourceInitialized(e);
         WindowChrome.SetWindowChrome(this, new WindowChrome
         {
-            CaptionHeight = 40,
+            // Must stay 0: the TitleBar decides which parts of its row act as
+            // caption, and a WindowChrome caption band on top would swallow
+            // clicks on the tabs.
+            CaptionHeight = 0,
             ResizeBorderThickness = new Thickness(4),
-            GlassFrameThickness = new Thickness(-1),
+            // Must stay 0: -1 (or any non-zero value) extends the DWM glass
+            // frame over the whole window, and the hosted shell view then
+            // paints its item labels through the glass text path -- white text
+            // on the white list background, i.e. an unreadable file list.
+            GlassFrameThickness = new Thickness(0),
             CornerRadius = default,
             UseAeroCaptionButtons = false,
         });
@@ -98,6 +123,13 @@ public partial class MainWindow : FluentWindow
         });
     }
 
+    private void UpdateSearchLayout()
+    {
+        var collapsed = ActualWidth <= MinWidth + 20;
+        SearchBox.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        SearchToggleButton.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         const int WM_KEYDOWN = 0x0100;
@@ -105,11 +137,12 @@ public partial class MainWindow : FluentWindow
 
         const int VK_T = 0x54;
         const int VK_W = 0x57;
+        const int VK_H = 0x48;
         var key = (int)wParam;
         var control = Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl);
         var shift = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
 
-        if (!control || key != VK_T && key != VK_W) return IntPtr.Zero;
+        if (!control || key != VK_T && key != VK_W && key != VK_H) return IntPtr.Zero;
 
         if (key == VK_T && shift)
         {
@@ -121,6 +154,11 @@ public partial class MainWindow : FluentWindow
         if (key == VK_T)
         {
             AddTab(AppSettings.Current.NewTabPath);
+            handled = true;
+        }
+        else if (key == VK_H)
+        {
+            ShowHistoryPage();
             handled = true;
         }
         else if (key == VK_W && _active is { } tab)
@@ -141,7 +179,99 @@ public partial class MainWindow : FluentWindow
     {
         ApplyAppearanceSettings();
         LoadBookmarks();
-        RestoreSession();
+        LoadRecentLocations();
+        if (AppSettings.Current.RestoreLastSession)
+        {
+            RestoreSession();
+        }
+        else
+        {
+            AddTab(AppSettings.Current.NewTabPath);
+        }
+        ApplyCaptureExplorerSetting();
+    }
+
+    private void RestoreWindowPlacement()
+    {
+        var settings = AppSettings.Current;
+        var virtualBounds = new Rect(
+            SystemParameters.VirtualScreenLeft,
+            SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth,
+            SystemParameters.VirtualScreenHeight);
+        var width = double.IsFinite(settings.WindowWidth) && settings.WindowWidth >= MinWidth
+            ? settings.WindowWidth
+            : Width;
+        var height = double.IsFinite(settings.WindowHeight) && settings.WindowHeight >= MinHeight
+            ? settings.WindowHeight
+            : Height;
+        width = Math.Min(width, virtualBounds.Width);
+        height = Math.Min(height, virtualBounds.Height);
+
+        // Guard against monitor changes: an off-screen saved position falls
+        // back to the centered default instead of being unreachable.
+        double left;
+        double top;
+        var candidate = new Rect(
+            double.IsFinite(settings.WindowLeft)
+                ? settings.WindowLeft
+                : virtualBounds.Left + ((virtualBounds.Width - width) / 2),
+            double.IsFinite(settings.WindowTop)
+                ? settings.WindowTop
+                : virtualBounds.Top + ((virtualBounds.Height - height) / 2),
+            width,
+            height);
+        if (virtualBounds.IntersectsWith(candidate))
+        {
+            left = candidate.Left;
+            top = candidate.Top;
+        }
+        else
+        {
+            left = virtualBounds.Left + ((virtualBounds.Width - width) / 2);
+            top = virtualBounds.Top + ((virtualBounds.Height - height) / 2);
+        }
+
+        Left = left;
+        Top = top;
+        Width = width;
+        Height = height;
+        _normalWindowBounds = new Rect(left, top, width, height);
+        if (settings.WindowMaximized)
+        {
+            WindowState = WindowState.Maximized;
+        }
+    }
+
+    private void TrackNormalWindowBounds()
+    {
+        if (WindowState != WindowState.Normal) return;
+        _normalWindowBounds = new Rect(Left, Top, ActualWidth, Height);
+    }
+
+    private void SaveWindowPlacement()
+    {
+        var bounds = WindowState == WindowState.Normal
+            ? new Rect(Left, Top, ActualWidth, Height)
+            : _normalWindowBounds;
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
+        var settings = AppSettings.Current;
+        settings.WindowLeft = bounds.Left;
+        settings.WindowTop = bounds.Top;
+        settings.WindowWidth = bounds.Width;
+        settings.WindowHeight = bounds.Height;
+        settings.WindowMaximized = WindowState == WindowState.Maximized;
+        AppStorage.SaveSettings(settings);
+    }
+
+    private void LoadRecentLocations()
+    {
+        _recentLocations.Clear();
+        _recentLocations.AddRange(AppStorage.LoadRecentLocations()
+            .Where(item => !string.IsNullOrWhiteSpace(item.Path))
+            .OrderByDescending(item => item.VisitedAt));
+        RefreshRecentLocationsDropdown();
     }
 
     private void ApplyAppearanceSettings()
@@ -149,15 +279,34 @@ public partial class MainWindow : FluentWindow
         BookmarkBar.Visibility = AppSettings.Current.ShowBookmarkBar
             ? Visibility.Visible
             : Visibility.Collapsed;
+        // IsChecked raises Checked/Unchecked synchronously. During startup those
+        // handlers must not save settings or rebuild shell views; they only
+        // mirror the persisted state.
+        _isApplyingAppearanceSettings = true;
+        try
+        {
+            ShowBookmarkBarMenuItem.IsChecked = AppSettings.Current.ShowBookmarkBar;
+            ShowNativeSidebarMenuItem.IsChecked = AppSettings.Current.ShowNativeSidebar;
+            ShowNativeCommandBarMenuItem.IsChecked = AppSettings.Current.ShowNativeCommandBar;
+            ShowDetailsPaneMenuItem.IsChecked = AppSettings.Current.ShowDetailsPane;
+            ShowPreviewPaneMenuItem.IsChecked = AppSettings.Current.ShowPreviewPane;
+        }
+        finally
+        {
+            _isApplyingAppearanceSettings = false;
+        }
+        DropPointButton.Visibility = AppSettings.Current.DropPointEnabled
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         if (!Enum.TryParse<AppTheme>(AppSettings.Current.Theme, out var parsedTheme))
         {
             parsedTheme = AppTheme.FollowSystem;
         }
         ThemeManager.Apply(parsedTheme);
-        // Make the empty area around the shell control match the theme; the
-        // shell-drawn file list inside it still follows the system theme.
-        Background = new SolidColorBrush(
-            ((SolidColorBrush)FindResource("Fluent.Background")).Color);
+        foreach (var tab in _tabs)
+        {
+            tab.ApplyShellTheme();
+        }
         _searchSort = AppSettings.Current.SearchSortByName
             ? EverythingClient.SortMode.NameAscending
             : EverythingClient.SortMode.ModifiedDescending;
@@ -173,13 +322,61 @@ public partial class MainWindow : FluentWindow
             if (ReferenceEquals(_active, tab)) SyncNavigationBar();
             MarkSessionDirty();
         };
+        tab.Browser.NavigationComplete += (_, e) =>
+        {
+            // Restored background tabs navigate on startup too; only the tab
+            // the user is actually looking at belongs in access history.
+            if (ReferenceEquals(_active, tab)) RecordRecentLocation(e.NewLocation);
+        };
+        tab.SelectionStateChanged += (_, _) =>
+        {
+            if (!ReferenceEquals(_active, tab)) return;
+            UpdateStatusBar();
+            SyncViewMenuChecks();
+        };
         _tabs.Add(tab);
         ViewContainer.Children.Add(tab.Host);
         ActivateTab(tab);
     }
 
+    /// <summary>
+    /// Entry point for command-line / pipe handoff: open this path in a new
+    /// tab (or activate an existing one), bring window to front. Safe to call
+    /// from any thread via Dispatcher.BeginInvoke in the caller.
+    /// </summary>
+    public void OpenPathInNewTab(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(() => OpenPathInNewTab(path));
+            return;
+        }
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+        var normalized = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var existing = _tabs.FirstOrDefault(t =>
+{
+            var parsing = t.Browser.NavigationLog?.CurrentLocation?.ParsingName;
+            return parsing is not null && string.Equals(
+                parsing.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                normalized, StringComparison.OrdinalIgnoreCase);
+        });
+        if (existing is not null)
+        {
+            ActivateTab(existing);
+        }
+        else
+        {
+            AddTab(normalized);
+        }
+    }
+
     private void ActivateTab(BrowserTab tab)
     {
+        BodyRow.Height = new GridLength(1, GridUnitType.Star);
+        HistoryRow.Height = new GridLength(0);
+        HistoryPanel.Visibility = Visibility.Collapsed;
         foreach (var t in _tabs)
         {
             t.IsActive = ReferenceEquals(t, tab);
@@ -187,6 +384,7 @@ public partial class MainWindow : FluentWindow
         }
         _active = tab;
         SyncNavigationBar();
+        UpdateStatusBar();
         MarkSessionDirty();
     }
 
@@ -194,6 +392,7 @@ public partial class MainWindow : FluentWindow
     {
         var index = _tabs.IndexOf(tab);
         if (index < 0) return;
+        if (tab.IsPinned) return;
 
         var wasActive = ReferenceEquals(_active, tab);
         var closedPath = tab.Browser.NavigationLog.CurrentLocation?.ParsingName;
@@ -216,22 +415,41 @@ public partial class MainWindow : FluentWindow
 
     private void SyncNavigationBar()
     {
+        // A background navigation can finish while the address editor is open;
+        // do not let that programmatic Text assignment re-open suggestions.
+        _isAddressEditing = false;
         var log = _active?.Browser.NavigationLog;
         var location = log?.CurrentLocation;
         var parsing = location?.ParsingName ?? string.Empty;
-        AddressBox.Text = parsing;
-        UpdateBreadcrumbs(parsing);
+        // Virtual shell folders (This PC, Network) have no file path; their
+        // parsing name is a GUID. Show the friendly name instead, and keep the
+        // GUID in Tag so Copy/Edit can still navigate to the real location.
+        AddressBox.Text = ShellDisplayName(parsing, location?.Name);
+        AddressBox.Tag = parsing;
+        UpdateBreadcrumbs(parsing, location?.Name);
         BackButton.IsEnabled = log?.CanNavigateBackward ?? false;
         ForwardButton.IsEnabled = log?.CanNavigateForward ?? false;
     }
 
-    private void UpdateBreadcrumbs(string parsingPath)
+    private void UpdateBreadcrumbs(string parsingPath, string? shellName = null)
     {
-        BreadcrumbItems.ItemsSource = BuildBreadcrumbs(parsingPath);
+        BreadcrumbItems.ItemsSource = BuildBreadcrumbs(parsingPath, shellName);
         ShowBreadcrumb(shouldEdit: false);
     }
 
     private sealed record BreadcrumbSegment(string Path, string Label);
+
+    // Friendly label for a shell location. Drive paths pass through unchanged;
+    // virtual folders fall back to the known Chinese names, then to the shell
+    // item's own display name.
+    private static string ShellDisplayName(string parsingPath, string? shellName)
+    {
+        if (string.IsNullOrEmpty(parsingPath)) return string.Empty;
+        if (parsingPath.Length >= 2 && char.IsLetter(parsingPath[0]) && parsingPath[1] == ':')
+            return parsingPath;
+        if (ShellFallbackNames.TryGetValue(parsingPath, out var known)) return known;
+        return string.IsNullOrWhiteSpace(shellName) ? parsingPath : shellName!;
+    }
 
     // Shell GUIDs whose display name cannot be resolved through ShellObject.Name
     // reliably; show fixed Chinese labels so the breadcrumb never shows a raw GUID.
@@ -244,7 +462,7 @@ public partial class MainWindow : FluentWindow
             ["::{645FF040-5081-101B-9F08-00AA002F954E}"] = "回收站",
         };
 
-    private static List<BreadcrumbSegment> BuildBreadcrumbs(string parsingPath)
+    private static List<BreadcrumbSegment> BuildBreadcrumbs(string parsingPath, string? shellName = null)
     {
         var result = new List<BreadcrumbSegment>();
         if (string.IsNullOrEmpty(parsingPath))
@@ -255,12 +473,21 @@ public partial class MainWindow : FluentWindow
         // Shell locations like "::{20D04FE0-...}" (This PC) are not drivable
         // paths; resolve their display name once and show them as a single
         // breadcrumb segment.
-        if (parsingPath.Length < 2 || parsingPath[1] != ':')
+        // "::{20D04FE0-...}" also has ':' at index 1, so check for a real
+        // drive prefix instead of testing that single character.
+        var isDrivePath = parsingPath.Length >= 2
+                          && char.IsLetter(parsingPath[0])
+                          && parsingPath[1] == ':';
+        if (!isDrivePath)
         {
             var label = "Shell 位置";
             if (ShellFallbackNames.TryGetValue(parsingPath, out var known))
             {
                 label = known;
+            }
+            else if (!string.IsNullOrWhiteSpace(shellName))
+            {
+                label = shellName!;
             }
             else
             {
@@ -299,12 +526,18 @@ public partial class MainWindow : FluentWindow
 
     private void ShowBreadcrumb(bool shouldEdit)
     {
+        _isAddressEditing = shouldEdit;
         BreadcrumbBar.Visibility = shouldEdit ? Visibility.Collapsed : Visibility.Visible;
         AddressBox.Visibility = shouldEdit ? Visibility.Visible : Visibility.Collapsed;
         if (shouldEdit)
         {
             AddressBox.Focus();
             AddressBox.SelectAll();
+            QueueAddressSuggestions(immediate: true);
+        }
+        else
+        {
+            CloseAddressSuggestions();
         }
     }
 
@@ -327,7 +560,9 @@ public partial class MainWindow : FluentWindow
 
     private void CopyAddress_Click(object sender, RoutedEventArgs e)
     {
-        var path = _active?.Browser.NavigationLog.CurrentLocation?.ParsingName;
+        // Prefer the raw parsing name so pasting still resolves virtual folders.
+        var path = AddressBox.Tag as string
+                   ?? _active?.Browser.NavigationLog.CurrentLocation?.ParsingName;
         if (string.IsNullOrEmpty(path)) return;
         try
         {
@@ -344,6 +579,7 @@ public partial class MainWindow : FluentWindow
     private void NavigateActive(string path)
     {
         if (_active is null) return;
+        CloseAddressSuggestions();
         try
         {
             _active.Browser.Navigate(ShellObject.FromParsingName(path));
@@ -378,6 +614,15 @@ public partial class MainWindow : FluentWindow
             return;
         }
         foreach (var p in paths) AddTab(p);
+        // Pinned flags are parallel to the saved paths; the order already has
+        // the pinned block at the front, so applying them keeps it intact.
+        if (session?.Pinned is { } pinnedFlags)
+        {
+            for (var i = 0; i < _tabs.Count && i < pinnedFlags.Count; i++)
+            {
+                _tabs[i].IsPinned = pinnedFlags[i];
+            }
+        }
         if (session is { } s && s.ActiveIndex >= 0 && s.ActiveIndex < _tabs.Count)
         {
             ActivateTab(_tabs[s.ActiveIndex]);
@@ -391,6 +636,7 @@ public partial class MainWindow : FluentWindow
     private SessionData BuildSessionData()
     {
         var paths = new List<string>();
+        var pinned = new List<bool>();
         var activeIndex = 0;
         for (var i = 0; i < _tabs.Count; i++)
         {
@@ -398,12 +644,14 @@ public partial class MainWindow : FluentWindow
             if (string.IsNullOrEmpty(path)) continue;
             if (ReferenceEquals(_tabs[i], _active)) activeIndex = paths.Count;
             paths.Add(path);
+            pinned.Add(_tabs[i].IsPinned);
         }
 
         return new SessionData
         {
             Tabs = paths,
             ActiveIndex = activeIndex,
+            Pinned = pinned,
         };
     }
 
@@ -641,10 +889,327 @@ public partial class MainWindow : FluentWindow
 
     private void NewTab_Click(object sender, RoutedEventArgs e) => AddTab(AppSettings.Current.NewTabPath);
 
+    // ---------- native Explorer takeover ----------
+
+    private void OnExplorerWindowCaptured(int hwnd, string path)
+    {
+        if (!AppSettings.Current.CaptureExplorer || _isClosing) return;
+
+        // The service already hid the external window; here we only need to
+        // add/reuse a tab and close it. Marshalled to the UI thread.
+        Dispatcher.BeginInvoke(() =>
+        {
+            try
+            {
+                OpenPathInNewTab(path);
+                ExplorerCaptureService.CloseWindow(hwnd);
+            }
+            catch (Exception ex)
+            {
+                AppStorage.Log($"Capture {path} failed: {ex.Message}");
+                // Give the window back if the tab could not be opened.
+                _ = ShowWindow(new IntPtr(hwnd), 5 /* SW_SHOW */);
+            }
+        });
+    }
+
+    // Win32 helpers for the takeover flow: hide then close the external window.
+    private const int SW_HIDE = 0;
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hwnd, int nCmdShow);
+
+    private void ApplyCaptureExplorerSetting()
+    {
+        if (AppSettings.Current.CaptureExplorer)
+        {
+            _captureService.Start();
+        }
+        else
+        {
+            _captureService.Stop();
+        }
+    }
+
     private void Settings_Click(object sender, RoutedEventArgs e)
     {
+        var nativeCommandBar = AppSettings.Current.ShowNativeCommandBar;
+        var previewPane = AppSettings.Current.ShowPreviewPane;
         var window = new SettingsWindow { Owner = this };
         window.ShowDialog();
+        ApplyCaptureExplorerSetting();
+        if (AppSettings.Current.ShowNativeCommandBar != nativeCommandBar)
+        {
+            foreach (var tab in _tabs)
+            {
+                tab.ApplyNativeCommandBarVisibility(AppSettings.Current.ShowNativeCommandBar);
+            }
+        }
+        if (AppSettings.Current.ShowPreviewPane != previewPane)
+        {
+            ShowPreviewPaneMenuItem.IsChecked = AppSettings.Current.ShowPreviewPane;
+            foreach (var tab in _tabs)
+            {
+                tab.ApplyPreviewPaneVisibility(AppSettings.Current.ShowPreviewPane);
+            }
+        }
+        DropPointButton.Visibility = AppSettings.Current.DropPointEnabled
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private void ToolbarMenuButton_Click(object sender, RoutedEventArgs e)
+    {
+        SyncToolbarMenuState();
+        ToolbarMenu.PlacementTarget = ToolbarMenuButton;
+        ToolbarMenu.IsOpen = true;
+    }
+
+    private void SyncToolbarMenuState()
+    {
+        ReopenClosedTabMenuItem.IsEnabled = _recentlyClosed.Count > 0;
+        OpenTerminalMenuItem.IsEnabled = _active?.Browser.NavigationLog.CurrentLocation is not null;
+    }
+
+    private void ReopenClosedTab_Click(object sender, RoutedEventArgs e) => ReopenClosedTab();
+
+    private void ShowBookmarkBar_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _isApplyingAppearanceSettings) return;
+        var visible = ShowBookmarkBarMenuItem.IsChecked;
+        BookmarkBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+        AppSettings.Current.ShowBookmarkBar = visible;
+        AppStorage.SaveSettings(AppSettings.Current);
+    }
+
+    private void ShowNativeSidebar_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _isApplyingAppearanceSettings) return;
+        var visible = ShowNativeSidebarMenuItem.IsChecked;
+        AppSettings.Current.ShowNativeSidebar = visible;
+        AppStorage.SaveSettings(AppSettings.Current);
+        foreach (var tab in _tabs) tab.ApplyNativeSidebarVisibility(visible);
+    }
+
+    private void ShowNativeCommandBar_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _isApplyingAppearanceSettings) return;
+        var visible = ShowNativeCommandBarMenuItem.IsChecked;
+        AppSettings.Current.ShowNativeCommandBar = visible;
+        AppStorage.SaveSettings(AppSettings.Current);
+        foreach (var tab in _tabs) tab.ApplyNativeCommandBarVisibility(visible);
+    }
+
+    // ---------- view mode / details pane ----------
+
+    private void ViewModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        SyncViewMenuChecks();
+        ViewMenu.PlacementTarget = ViewModeButton;
+        ViewMenu.IsOpen = true;
+    }
+
+    private void ViewMenu_Opened(object sender, RoutedEventArgs e) => SyncViewMenuChecks();
+
+    private void ViewModeMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_active is null || sender is not MenuItem { Tag: string tag }) return;
+        var mode = tag switch
+        {
+            "Details" => ExplorerBrowserViewMode.Details,
+            "List" => ExplorerBrowserViewMode.List,
+            "SmallIcon" => ExplorerBrowserViewMode.SmallIcon,
+            "Icon" => ExplorerBrowserViewMode.Icon,
+            "LargeIcon" or "ExtraLargeIcon" => ExplorerBrowserViewMode.Thumbnail,
+            "Tile" => ExplorerBrowserViewMode.Tile,
+            "Content" => ExplorerBrowserViewMode.Content,
+            _ => ExplorerBrowserViewMode.Auto,
+        };
+        var thumbnailSize = tag switch
+        {
+            "LargeIcon" => 96,
+            "ExtraLargeIcon" => 256,
+            _ => (int?)null,
+        };
+        _active.SetViewMode(mode, thumbnailSize);
+        SyncViewMenuChecks();
+    }
+
+    // The shell owns the real view state and may cluster two modes under one
+    // radio choice, so a best-effort match is all the check marks can show.
+    private void SyncViewMenuChecks()
+    {
+        var current = _active is { } tab && tab.Browser.IsHandleCreated
+            ? tab.Browser.ContentOptions.ViewMode
+            : ExplorerBrowserViewMode.Auto;
+        var thumbnailSize = 0;
+        if (_active is { } activeTab && activeTab.Browser.IsHandleCreated)
+        {
+            try
+            {
+                thumbnailSize = activeTab.Browser.ContentOptions.ThumbnailSize;
+            }
+            catch (COMException)
+            {
+                // The shell can be between views while navigating.
+            }
+        }
+        var isThumbnailView = current is ExplorerBrowserViewMode.Thumbnail
+            or ExplorerBrowserViewMode.ThumbStrip;
+        foreach (var item in ViewMenu.Items.OfType<MenuItem>())
+        {
+            if (item.Tag is not string tag) continue;
+            item.IsChecked = tag switch
+            {
+                "Details" => current == ExplorerBrowserViewMode.Details,
+                "List" => current == ExplorerBrowserViewMode.List,
+                "SmallIcon" => current == ExplorerBrowserViewMode.SmallIcon,
+                "Icon" => current == ExplorerBrowserViewMode.Icon,
+                "LargeIcon" => isThumbnailView && thumbnailSize < 160,
+                "ExtraLargeIcon" => isThumbnailView && thumbnailSize >= 160,
+                "Tile" => current == ExplorerBrowserViewMode.Tile,
+                "Content" => current == ExplorerBrowserViewMode.Content,
+                _ => false,
+            };
+        }
+    }
+
+    private void ShowDetailsPane_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _isApplyingAppearanceSettings) return;
+        var visible = ShowDetailsPaneMenuItem.IsChecked;
+        AppSettings.Current.ShowDetailsPane = visible;
+        AppStorage.SaveSettings(AppSettings.Current);
+        foreach (var tab in _tabs) tab.ApplyDetailsPaneVisibility(visible);
+        UpdateStatusBar();
+    }
+
+    private void ShowPreviewPane_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _isApplyingAppearanceSettings) return;
+        var visible = ShowPreviewPaneMenuItem.IsChecked;
+        AppSettings.Current.ShowPreviewPane = visible;
+        AppStorage.SaveSettings(AppSettings.Current);
+        foreach (var tab in _tabs) tab.ApplyPreviewPaneVisibility(visible);
+    }
+
+    // ---------- status bar ----------
+
+    private void UpdateStatusBar()
+    {
+        if (_active is not { } tab)
+        {
+            StatusBar.Visibility = Visibility.Collapsed;
+            StatusText.Text = string.Empty;
+            StatusHintText.Text = string.Empty;
+            return;
+        }
+        try
+        {
+            var items = tab.Browser.Items;
+            var selected = tab.Browser.SelectedItems;
+            var selectedCount = selected.Count;
+            var fileBytes = 0UL;
+            var folders = 0;
+            for (var i = 0; i < selectedCount; i++)
+            {
+                if (selected[i] is not { } item) continue;
+                if (item is ShellFolder) { folders++; continue; }
+                // Virtual shell items have no Size property; they just do not
+                // contribute to the byte total.
+                if (item.Properties.System.Size.Value is not { } size) continue;
+                fileBytes += size;
+            }
+            var totalCount = items.Count;
+            // The shell status bar already covers the common cases: total item
+            // count, item size and "N selected". Keep FileTabs' bar only when
+            // the selection is entirely folders; that child count is the one
+            // aggregate the native view does not show.
+            if (selectedCount == 0 || selectedCount != folders)
+            {
+                StatusBar.Visibility = Visibility.Collapsed;
+                StatusText.Text = string.Empty;
+                StatusHintText.Text = string.Empty;
+            }
+            else
+            {
+                StatusBar.Visibility = Visibility.Visible;
+                StatusText.Text = $"已选择 {selectedCount} 个项目" +
+                    (fileBytes > 0 ? $" · {FormatByteSize(fileBytes)}" : string.Empty);
+                StatusHintText.Text = folders > 0
+                    ? $"{totalCount} 个项目 · 含 {folders} 个文件夹"
+                    : $"{totalCount} 个项目";
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or COMException)
+        {
+            // The shell view is mid-navigation and its item collections are
+            // not readable yet; the next navigation event refreshes the bar.
+            StatusBar.Visibility = Visibility.Collapsed;
+            StatusText.Text = string.Empty;
+            StatusHintText.Text = string.Empty;
+        }
+    }
+
+    private static string FormatByteSize(ulong size)
+    {
+        if (size < 1024) return $"{size} B";
+        if (size < 1024 * 1024) return $"{size / 1024.0:F1} KB";
+        if (size < 1024UL * 1024 * 1024) return $"{size / 1024.0 / 1024:F1} MB";
+        return $"{size / 1024.0 / 1024 / 1024:F2} GB";
+    }
+
+    private void OpenTerminal_Click(object sender, RoutedEventArgs e)
+    {
+        var path = _active?.Browser.NavigationLog.CurrentLocation?.ParsingName;
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        var directory = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
+        if (string.IsNullOrWhiteSpace(directory)) return;
+
+        var terminal = Enum.TryParse<TerminalKind>(AppSettings.Current.Terminal, out var parsed)
+            ? parsed
+            : TerminalKind.WindowsTerminal;
+        switch (terminal)
+        {
+            case TerminalKind.PowerShell:
+                StartProcess("powershell.exe", "-NoExit", directory);
+                break;
+            case TerminalKind.CommandPrompt:
+                StartProcess("cmd.exe", "/K cd /d \"" + directory + "\"", directory);
+                break;
+            default:
+                try
+                {
+                    StartProcess("wt.exe", $"-d \"{directory}\"", directory);
+                }
+                catch (Exception)
+                {
+                    // Windows Terminal is optional; fall back to the system console.
+                    StartProcess("cmd.exe", "/K cd /d \"" + directory + "\"", directory);
+                }
+                break;
+        }
+    }
+
+    private static void StartProcess(string fileName, string arguments, string workingDirectory)
+    {
+        Process.Start(new ProcessStartInfo(fileName, arguments)
+        {
+            UseShellExecute = true,
+            WorkingDirectory = workingDirectory,
+        });
+    }
+
+    private void DropPointButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!AppSettings.Current.DropPointEnabled)
+        {
+            MessageBox.Show(this, "拖放中转已在设置中关闭。", "FileTabs",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        (System.Windows.Application.Current as App)?.DropPoints.ShowPadForMainWindow();
     }
 
     // ---------- workspaces ----------
@@ -723,15 +1288,6 @@ public partial class MainWindow : FluentWindow
         AppStorage.SaveWorkspaces(workspaces);
     }
 
-    private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
-
-    private void Maximize_Click(object sender, RoutedEventArgs e)
-    {
-        WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
-    }
-
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
-
     private void OpenWorkspace_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new WorkspaceWindow(this);
@@ -784,9 +1340,19 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    // ui:TitleBar shows the window system menu on every right click bubbling up
+    // to it, which swallows the per-tab context menu declared in the tab
+    // template. Stop the event at the tab strip so the menu wins.
+    private void TabStrip_RightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+    }
+
     private void TabStrip_PreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
         if (_dragTab is null || e.LeftButton != MouseButtonState.Pressed) return;
+        // Pinned tabs keep their slot, so they are not draggable.
+        if (_dragTab.IsPinned) return;
         var delta = e.GetPosition(this).X - _dragStart.X;
         if (!_isDraggingTab)
         {
@@ -800,7 +1366,8 @@ public partial class MainWindow : FluentWindow
         if (TabStrip.ItemContainerGenerator.ContainerFromItem(_dragTab) is FrameworkElement container)
             tabWidth = Math.Max(40, container.ActualWidth - 12);
         var target = from + (int)Math.Floor(delta / tabWidth);
-        target = Math.Max(0, Math.Min(_tabs.Count - 1, target));
+        // Never drag an unpinned tab into the pinned block.
+        target = Math.Max(_tabs.Count(t => t.IsPinned), Math.Min(_tabs.Count - 1, target));
         if (target == from) return;
 
         _tabs.Move(from, target);
@@ -837,9 +1404,33 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    // The tab strip lives inside ui:TitleBar, whose own right-click handling
+    // wins over the implicit ContextMenu channel, so open the menu explicitly.
+    private void TabItem_RightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { ContextMenu: { } menu } element) return;
+        menu.PlacementTarget = element;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
     private void TabClose_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: BrowserTab tab }) CloseTab(tab);
+    }
+
+    // Pinned tabs form a block at the front: pinning appends to that block,
+    // unpinning drops the tab right after it.
+    private void TabPin_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: BrowserTab tab }) return;
+        var from = _tabs.IndexOf(tab);
+        if (from < 0) return;
+
+        var pinnedCount = _tabs.Count(t => t.IsPinned);
+        var target = tab.IsPinned ? pinnedCount - 1 : pinnedCount;
+        if (target != from) _tabs.Move(from, target);
+        MarkSessionDirty();
     }
 
     private void TabCloseOthers_Click(object sender, RoutedEventArgs e)
@@ -895,23 +1486,86 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private void SearchIcon_Click(object sender, RoutedEventArgs e) => SearchBox.Focus();
+    private void SearchToggleButton_Click(object sender, RoutedEventArgs e)
+    {
+        SearchBox.Focus();
+    }
 
-    private void Go_Click(object sender, RoutedEventArgs e) => NavigateActive(AddressBox.Text);
+    private void Go_Click(object sender, RoutedEventArgs e) => NavigateAddressBox();
+
+    // The box shows friendly names ("此电脑"), so map them back to the shell
+    // GUID before navigating; real paths pass through untouched.
+    private void NavigateAddressBox()
+    {
+        var typed = AddressBox.Text.Trim();
+        if (typed.Length == 0) return;
+        var target = ShellFallbackNames.FirstOrDefault(
+            pair => string.Equals(pair.Value, typed, StringComparison.OrdinalIgnoreCase)).Key ?? typed;
+        NavigateActive(target);
+    }
 
     private void AddressBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
         {
-            NavigateActive(AddressBox.Text);
+            if (TryAcceptAddressSuggestion())
+            {
+                e.Handled = true;
+                return;
+            }
+            NavigateAddressBox();
             ShowBreadcrumb(shouldEdit: false);
             e.Handled = true;
         }
         else if (e.Key == Key.Escape)
         {
+            CloseAddressSuggestions();
             ShowBreadcrumb(shouldEdit: false);
             e.Handled = true;
         }
+    }
+
+    private void AddressBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        // TextBox handles arrow keys before KeyDown reaches instance handlers.
+        if (!AddressSuggestPopup.IsOpen) return;
+        if (e.Key == Key.Down)
+        {
+            MoveAddressSuggestionSelection(1);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Up)
+        {
+            MoveAddressSuggestionSelection(-1);
+            e.Handled = true;
+        }
+    }
+
+    private void AddressBox_LostKeyboardFocus(
+        object sender,
+        KeyboardFocusChangedEventArgs e)
+    {
+        // StaysOpen is true so arrow keys do not dismiss the popup before
+        // KeyDown runs. Close it explicitly unless focus moved into the list.
+        if (e.NewFocus is DependencyObject focused
+            && AddressSuggestPopup.Child is UIElement popupContent
+            && (ReferenceEquals(focused, popupContent) || popupContent.IsAncestorOf(focused)))
+        {
+            return;
+        }
+        CloseAddressSuggestions();
+    }
+
+    private void AddressBox_TextChanged(
+        object sender,
+        System.Windows.Controls.TextChangedEventArgs e)
+    {
+        if (!_isAddressEditing) return;
+        // Editing invalidates a keyboard-selected item immediately; the
+        // replacement list may not have arrived yet.
+        _addressSuggestionChosen = false;
+        AddressSuggestList.SelectedIndex = -1;
+        QueueAddressSuggestions();
     }
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
@@ -964,6 +1618,35 @@ public partial class MainWindow : FluentWindow
             CloseTab(tab);
             e.Handled = true;
         }
+        else if (e.Key == Key.H)
+        {
+            ShowHistoryPage();
+            e.Handled = true;
+        }
+    }
+
+    // Chrome-style access history: navigation events are coalesced so fast
+    // programmatic navigation and duplicate refreshes do not flood the list.
+    private void RecordRecentLocation(ShellObject? location)
+    {
+        var path = location?.ParsingName;
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        if (_recentLocations.Count > 0 &&
+            string.Equals(_recentLocations[0].Path, path, StringComparison.OrdinalIgnoreCase) &&
+            DateTime.Now - _recentLocations[0].VisitedAt < TimeSpan.FromSeconds(2))
+        {
+            _recentLocations[0] = new RecentLocation { Path = path, VisitedAt = DateTime.Now };
+            return;
+        }
+
+        _recentLocations.RemoveAll(item =>
+            string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
+        _recentLocations.Insert(0, new RecentLocation { Path = path, VisitedAt = DateTime.Now });
+        if (_recentLocations.Count > 500) _recentLocations.RemoveRange(500, _recentLocations.Count - 500);
+        AppStorage.SaveRecentLocations(_recentLocations);
+        RefreshRecentLocationsDropdown();
+        if (HistoryPanel.Visibility == Visibility.Visible) RefreshHistoryPage();
     }
 
     // ---------- Everything search ----------
@@ -1096,6 +1779,179 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    // Chrome-style access-history window: matches the recent-items dropdown,
+    // but exposes the whole local list with a simple path filter.
+    private void RefreshRecentLocationsDropdown()
+    {
+        RecentLocationsList.ItemsSource = _recentLocations
+            .Take(10)
+            .Select(item => new RecentLocationDisplay(item))
+            .ToList();
+    }
+
+    private void RecentLocationsButton_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshRecentLocationsDropdown();
+        RecentLocationsPopup.IsOpen = true;
+    }
+
+    private void OpenSelectedRecentLocation()
+    {
+        if (RecentLocationsList.SelectedItem is not RecentLocationDisplay item) return;
+        RecentLocationsPopup.IsOpen = false;
+        OpenFolderTab(item.Path);
+    }
+
+    private void RecentLocationsList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        OpenSelectedRecentLocation();
+    }
+
+    private void RecentLocationsList_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+                OpenSelectedRecentLocation();
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                RecentLocationsPopup.IsOpen = false;
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void RecentLocationsOpenFullPage_Click(object sender, RoutedEventArgs e)
+    {
+        RecentLocationsPopup.IsOpen = false;
+        ShowHistoryPage();
+    }
+
+    private void ShowHistoryPage()
+    {
+        RecentLocationsPopup.IsOpen = false;
+        // Keep the file view mounted; the drawer takes the bottom 45%.
+        HistoryRow.Height = new GridLength(45, GridUnitType.Star);
+        BodyRow.Height = new GridLength(55, GridUnitType.Star);
+        HistoryPanel.Visibility = Visibility.Visible;
+        RefreshHistoryPage();
+        HistorySearchBox.Focus();
+    }
+
+    private void CloseHistoryPage()
+    {
+        BodyRow.Height = new GridLength(1, GridUnitType.Star);
+        HistoryRow.Height = new GridLength(0);
+        HistoryPanel.Visibility = Visibility.Collapsed;
+        HistorySearchBox.Clear();
+        HistoryItems.ItemsSource = null;
+        if (_active is null && _tabs.Count > 0) ActivateTab(_tabs[0]);
+    }
+
+    private void HistoryPageClose_Click(object sender, RoutedEventArgs e) => CloseHistoryPage();
+
+    private static string RecentLocationTimeText(DateTime visitedAt)
+    {
+        var today = DateTime.Today;
+        if (visitedAt.Date == today) return visitedAt.ToString("HH:mm");
+        if (visitedAt.Date == today.AddDays(-1)) return $"昨天 {visitedAt:HH:mm}";
+        return visitedAt.ToString("yyyy-MM-dd HH:mm");
+    }
+
+    private void RefreshHistoryPage()
+    {
+        var query = HistorySearchBox.Text.Trim();
+        var matches = string.IsNullOrEmpty(query)
+            ? _recentLocations.ToList()
+            : _recentLocations.Where(item =>
+                item.Path.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        HistoryItems.ItemsSource = matches.Select(item => new RecentLocationDisplay(item)).ToList();
+        HistoryEmptyHint.Visibility = matches.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void HistorySearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+    {
+        RefreshHistoryPage();
+    }
+
+    private void HistorySearchBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Down when HistoryItems.Items.Count > 0:
+                HistoryItems.Focus();
+                HistoryItems.SelectedIndex = 0;
+                e.Handled = true;
+                break;
+            case Key.Enter when HistoryItems.Items.Count > 0:
+                HistoryItems.SelectedIndex = 0;
+                OpenSelectedHistoryItem();
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                CloseHistoryPage();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void OpenSelectedHistoryItem()
+    {
+        if (HistoryItems.SelectedItem is not RecentLocationDisplay item) return;
+        CloseHistoryPage();
+        OpenFolderTab(item.Path);
+    }
+
+    private void HistoryItems_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        OpenSelectedHistoryItem();
+    }
+
+    private void HistoryItems_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+                OpenSelectedHistoryItem();
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                CloseHistoryPage();
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private sealed record RecentLocationDisplay
+    {
+        public RecentLocationDisplay(RecentLocation location)
+        {
+            Path = location.Path;
+            VisitedAt = location.VisitedAt;
+        }
+
+        public string Path { get; }
+        public DateTime VisitedAt { get; }
+        public string DisplayTitle => ShellDisplayName(Path, TryShellName(Path));
+        public string VisitedAtText => RecentLocationTimeText(VisitedAt);
+
+        private static string? TryShellName(string path)
+        {
+            if (path.Length >= 2 && char.IsLetter(path[0]) && path[1] == ':') return null;
+            try
+            {
+                return ShellObject.FromParsingName(path).Name;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+    }
+
     private EverythingClient.SortMode _searchSort = EverythingClient.SortMode.ModifiedDescending;
 
     private void OpenSearchPanel(bool focusList)
@@ -1170,5 +2026,338 @@ public partial class MainWindow : FluentWindow
         }
         AddTab(folderPath);
     }
+
+    // ---------- address bar autocomplete ----------
+
+    private sealed record AddressSuggestion(string Name, string Path, bool IsFolder);
+
+    private const int MaxAddressSuggestions = 14;
+
+    private void QueueAddressSuggestions(bool immediate = false)
+    {
+        _addressSuggestionsCts?.Cancel();
+
+        var cts = new CancellationTokenSource();
+        _addressSuggestionsCts = cts;
+        var query = AddressBox.Text;
+        var recentPaths = _recentLocations.Select(item => item.Path).ToList();
+        var currentPath = _active?.Browser.NavigationLog.CurrentLocation?.ParsingName;
+        _ = RefreshAddressSuggestionsAsync(query, recentPaths, currentPath, cts, immediate);
+    }
+
+    private async Task RefreshAddressSuggestionsAsync(
+        string query,
+        IReadOnlyList<string> recentPaths,
+        string? currentPath,
+        CancellationTokenSource cts,
+        bool immediate)
+    {
+        var token = cts.Token;
+        try
+        {
+            // A short debounce keeps typing responsive while still making the
+            // list update feel immediate. Directory enumeration runs off the UI
+            // thread because network folders can block for seconds.
+            if (!immediate) await Task.Delay(120, token);
+            var suggestions = await Task.Run(
+                () => BuildAddressSuggestions(query, recentPaths, currentPath, token),
+                token);
+            if (token.IsCancellationRequested
+                || !_isAddressEditing
+                || !string.Equals(AddressBox.Text, query, StringComparison.Ordinal))
+            {
+                return;
+            }
+            ApplyAddressSuggestions(suggestions);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by the next keystroke or by closing the editor.
+        }
+        finally
+        {
+            if (ReferenceEquals(_addressSuggestionsCts, cts))
+            {
+                _addressSuggestionsCts = null;
+            }
+            cts.Dispose();
+        }
+    }
+
+    private static List<AddressSuggestion> BuildAddressSuggestions(
+        string rawQuery,
+        IReadOnlyList<string> recentPaths,
+        string? currentPath,
+        CancellationToken token)
+    {
+        var results = new List<AddressSuggestion>();
+        var query = rawQuery.Trim();
+        var expandedQuery = Environment.ExpandEnvironmentVariables(query);
+
+        token.ThrowIfCancellationRequested();
+        if (expandedQuery.Length > 0
+            && Path.IsPathFullyQualified(expandedQuery))
+        {
+            AddSuggestion(results, expandedQuery);
+        }
+
+        AddDirectoryMatches(results, expandedQuery, token);
+
+        foreach (var recent in recentPaths)
+        {
+            if (results.Count >= MaxAddressSuggestions) break;
+            if (!IsAddressPathMatch(recent, expandedQuery)) continue;
+            AddSuggestion(results, recent);
+        }
+
+        var current = currentPath;
+        while (!string.IsNullOrEmpty(current) && results.Count < MaxAddressSuggestions)
+        {
+            if (IsAddressPathMatch(current, expandedQuery))
+            {
+                AddSuggestion(results, current);
+            }
+            var parent = Path.GetDirectoryName(current);
+            if (string.Equals(parent, current, StringComparison.OrdinalIgnoreCase)) break;
+            current = parent;
+        }
+
+        try
+        {
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                if (results.Count >= MaxAddressSuggestions) break;
+                if (!drive.IsReady) continue;
+                var root = drive.RootDirectory.FullName;
+                if (!IsAddressPathMatch(root, expandedQuery)) continue;
+                AddSuggestion(results, root);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Drive enumeration is optional; keep the rest of the list.
+        }
+
+        if (expandedQuery.Length > 0)
+        {
+            foreach (var pair in ShellFallbackNames)
+            {
+                if (results.Count >= MaxAddressSuggestions) break;
+                if (!pair.Value.Contains(expandedQuery, StringComparison.OrdinalIgnoreCase)) continue;
+                AddShellSuggestion(results, pair.Key, pair.Value);
+            }
+        }
+
+        return results;
+    }
+
+    private static void AddDirectoryMatches(
+        List<AddressSuggestion> results,
+        string query,
+        CancellationToken token)
+    {
+        if (query.Length == 0) return;
+        if (query.Length == 2 && char.IsLetter(query[0]) && query[1] == ':')
+        {
+            query += Path.DirectorySeparatorChar;
+        }
+
+        string? directory;
+        string prefix;
+        if (EndsWithDirectorySeparator(query))
+        {
+            directory = query;
+            prefix = string.Empty;
+        }
+        else
+        {
+            directory = Path.GetDirectoryName(query);
+            prefix = Path.GetFileName(query);
+        }
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) return;
+
+        var directories = new List<string>();
+        var files = new List<string>();
+        try
+        {
+            foreach (var path in Directory.EnumerateDirectories(directory))
+            {
+                token.ThrowIfCancellationRequested();
+                if (!FileNameStartsWith(path, prefix)) continue;
+                directories.Add(path);
+                if (directories.Count >= MaxAddressSuggestions) break;
+            }
+            foreach (var path in Directory.EnumerateFiles(directory))
+            {
+                token.ThrowIfCancellationRequested();
+                if (!FileNameStartsWith(path, prefix)) continue;
+                files.Add(path);
+                if (files.Count >= MaxAddressSuggestions) break;
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException
+            or IOException
+            or System.Security.SecurityException
+            or ArgumentException
+            or NotSupportedException)
+        {
+            // A protected or disconnected directory should never break typing.
+        }
+
+        foreach (var path in directories.OrderBy(
+                     path => Path.GetFileName(path),
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            if (results.Count >= MaxAddressSuggestions) return;
+            AddSuggestion(results, path);
+        }
+        foreach (var path in files.OrderBy(
+                     path => Path.GetFileName(path),
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            if (results.Count >= MaxAddressSuggestions) return;
+            AddSuggestion(results, path);
+        }
+    }
+
+    private static bool EndsWithDirectorySeparator(string path)
+    {
+        return path.EndsWith(Path.DirectorySeparatorChar)
+            || path.EndsWith(Path.AltDirectorySeparatorChar);
+    }
+
+    private static bool FileNameStartsWith(string path, string prefix)
+    {
+        if (prefix.Length == 0) return true;
+        var name = Path.GetFileName(path);
+        return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAddressPathMatch(string path, string query)
+    {
+        if (query.Length == 0) return true;
+        if (path.Contains(query, StringComparison.OrdinalIgnoreCase)) return true;
+        var name = Path.GetFileName(path.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar));
+        return name.StartsWith(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AddSuggestion(List<AddressSuggestion> results, string path)
+    {
+        if (results.Count >= MaxAddressSuggestions || string.IsNullOrWhiteSpace(path)) return;
+        string normalized;
+        try
+        {
+            normalized = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return;
+        }
+        if (results.Any(s => string.Equals(s.Path, normalized, StringComparison.OrdinalIgnoreCase))) return;
+        if (!Directory.Exists(normalized) && !File.Exists(normalized)) return;
+
+        var isFolder = Directory.Exists(normalized);
+        var trimmed = normalized.TrimEnd(Path.DirectorySeparatorChar);
+        var name = Path.GetFileName(trimmed);
+        results.Add(new AddressSuggestion(
+            string.IsNullOrEmpty(name) ? normalized : name,
+            normalized,
+            isFolder));
+    }
+
+    private static void AddShellSuggestion(
+        List<AddressSuggestion> results,
+        string path,
+        string name)
+    {
+        if (results.Count >= MaxAddressSuggestions) return;
+        if (results.Any(item =>
+                string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+        results.Add(new AddressSuggestion(name, path, true));
+    }
+
+    private void ApplyAddressSuggestions(List<AddressSuggestion> suggestions)
+    {
+        _addressSuggestions = suggestions;
+        _addressSuggestionChosen = false;
+        AddressSuggestList.SelectedIndex = -1;
+        if (suggestions.Count == 0)
+        {
+            AddressSuggestPopup.IsOpen = false;
+            AddressSuggestList.ItemsSource = null;
+            return;
+        }
+        AddressSuggestList.ItemsSource = suggestions;
+        AddressSuggestPopup.IsOpen = true;
+    }
+
+    private void CloseAddressSuggestions()
+    {
+        _addressSuggestionsCts?.Cancel();
+        _addressSuggestionsCts = null;
+        AddressSuggestPopup.IsOpen = false;
+        AddressSuggestList.ItemsSource = null;
+        _addressSuggestions = new List<AddressSuggestion>();
+        _addressSuggestionChosen = false;
+    }
+
+    private void MoveAddressSuggestionSelection(int delta)
+    {
+        if (_addressSuggestions.Count == 0) return;
+
+        var current = AddressSuggestList.SelectedIndex;
+        var next = current < 0
+            ? (delta > 0 ? 0 : _addressSuggestions.Count - 1)
+            : Math.Clamp(current + delta, 0, _addressSuggestions.Count - 1);
+        AddressSuggestList.SelectedIndex = next;
+        _addressSuggestionChosen = true;
+        AddressSuggestList.ScrollIntoView(AddressSuggestList.SelectedItem);
+    }
+
+    /// <summary>
+    /// Enter in the address box: keep the typed navigation for as long as it
+    /// does not exactly match a suggestion, because pressing Enter anywhere in
+    /// the list would otherwise silently override hand-typed paths.
+    /// </summary>
+    private bool TryAcceptAddressSuggestion()
+    {
+        if (!AddressSuggestPopup.IsOpen || !_addressSuggestionChosen) return false;
+        return TryOpenAddressSuggestion(AddressSuggestList.SelectedItem as AddressSuggestion);
+    }
+
+    private void AddressSuggestList_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left) return;
+        if (TryOpenAddressSuggestion(AddressSuggestList.SelectedItem as AddressSuggestion)) e.Handled = true;
+    }
+
+    private bool TryOpenAddressSuggestion(AddressSuggestion? suggestion)
+    {
+        if (suggestion is null) return false;
+        CloseAddressSuggestions();
+        ShowBreadcrumb(shouldEdit: false);
+        if (suggestion.IsFolder)
+        {
+            NavigateActive(suggestion.Path);
+        }
+        else
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(suggestion.Path) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "打开失败");
+            }
+        }
+        return true;
+    }
+
 }
 
