@@ -72,26 +72,28 @@
             </Border>
         </Popup>
 
-        <!-- Title bar: WPF UI's TitleBar draws and wires the caption buttons
-             (hover fills, close red) and hit-tests the caption row itself, so
-             the tab strip lives in its Header slot. The empty area right of
-             the tabs stays a real caption: drag, double-click maximize and
-             the system menu all keep working. -->
-        <ui:TitleBar DockPanel.Dock="Top" Height="40" ShowHelp="False"
-                     Background="{DynamicResource SolidBackgroundFillColorBaseAltBrush}">
+        <!-- 标题区沿用 360 文件夹的浅蓝灰底、紧凑白标签和右侧标签列表按钮。
+             ui:TitleBar 继续负责标题栏拖动、双击最大化和系统窗口按钮。 -->
+        <ui:TitleBar x:Name="MainTitleBar" DockPanel.Dock="Top" Height="36" ShowHelp="False"
+                     Background="{DynamicResource FileTabs.ChromeFillBrush}">
             <ui:TitleBar.Header>
-                <Border x:Name="TabBar" Background="Transparent" Margin="10,0,4,0"
+                <Border x:Name="TabBar" Background="Transparent" Margin="6,0,0,0"
                         MouseDown="TabStripBackground_MouseDown"
                         MouseRightButtonUp="TabStrip_RightButtonUp"
                         PreviewMouseMove="TabStrip_PreviewMouseMove"
                         MouseLeftButtonUp="TabStrip_MouseLeftButtonUp">
-                    <StackPanel Orientation="Horizontal">
-                        <ToggleButton x:Name="MenuButton" Width="26" Height="26"
-                                      Margin="0,0,12,0" VerticalAlignment="Center"
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <ToggleButton x:Name="MenuButton" Width="30" Height="30"
+                                      Margin="0,0,4,0" VerticalAlignment="Center"
                                       Focusable="False" ToolTip="菜单">
                             <ui:SymbolIcon Symbol="Navigation20" FontSize="14"/>
                         </ToggleButton>
-                        <ItemsControl x:Name="TabStrip">
+                        <Grid Grid.Column="1" ClipToBounds="True">
+                            <ItemsControl x:Name="TabStrip">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Orientation="Horizontal"/>
@@ -109,8 +111,8 @@
                             </ItemsControl.ItemContainerStyle>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid x:Name="TabRoot" Height="36" MinWidth="200" MaxWidth="320"
-                                          Margin="0,4,0,0" VerticalAlignment="Bottom"
+                                    <Grid x:Name="TabRoot" Height="30" MinWidth="120" MaxWidth="240"
+                                          Margin="0,6,0,0" VerticalAlignment="Bottom"
                                           Background="Transparent"
                                           MouseDown="TabItem_MouseDown"
                                           MouseRightButtonUp="TabItem_RightButtonUp"
@@ -129,130 +131,204 @@
                                             </ContextMenu>
                                         </Grid.ContextMenu>
                                         <Border x:Name="TabBorder" Padding="0"
-                                                CornerRadius="8,8,0,0"
-                                                Background="{DynamicResource SolidBackgroundFillColorSecondaryBrush}">
-                                            <DockPanel Margin="12,0,6,0">
+                                                CornerRadius="6,6,0,0"
+                                                Background="{DynamicResource FileTabs.TabInactiveBrush}">
+                                            <DockPanel Margin="7,0,3,0">
                                                 <Button x:Name="CloseButton"
                                                         Style="{StaticResource TabCloseButton}" DockPanel.Dock="Right"
-                                                        VerticalAlignment="Center"
+                                                        Width="18" Height="18" Margin="2,0,0,0"
+                                                        VerticalAlignment="Center" Visibility="Hidden"
                                                         Click="TabClose_Click">
-                                                    <ui:SymbolIcon Symbol="Dismiss16" FontSize="10"/>
+                                                    <ui:SymbolIcon Symbol="Dismiss16" FontSize="9"/>
                                                 </Button>
+                                                <!-- 普通文件夹用黄色文件夹图形；特殊 Shell 位置
+                                                     用对应图标，文字色跟随标题区主题。 -->
+                                                <Grid Width="17" Height="16" Margin="0,0,6,0"
+                                                      VerticalAlignment="Center">
+                                                    <Path x:Name="TabFolderIcon" Style="{StaticResource FileTabs.TabFolderIcon}"/>
+                                                    <ui:SymbolIcon x:Name="TabSymbolIcon" Symbol="Folder24"
+                                                                   FontSize="13" Visibility="Collapsed"
+                                                                   Foreground="{DynamicResource FileTabs.ChromeMutedTextBrush}"/>
+                                                </Grid>
                                                 <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
-                                                           Margin="0,0,6,0" TextTrimming="CharacterEllipsis"
-                                                           Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                                                           Margin="0,0,2,0" FontSize="12.5"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource FileTabs.ChromeTextBrush}"/>
                                             </DockPanel>
                                         </Border>
-                                        <!-- The scoops hang outside the tab body (negative margin), so
-                                             every tab gets the same inverted bottom radius. A neighbour's
-                                             scoop that lands on the active tab is hidden underneath it:
-                                             the active tab is drawn last (Panel.ZIndex=10) with an opaque
-                                             background. -->
+                                        <!-- 原有的外圆角标签造型：底部两个反向圆弧把标签和标题区
+                                             连成一体，相邻标签共用这条曲线；激活标签不透明，
+                                             画在最后，压住邻居的弧线，形成 Chrome 式波浪底边。 -->
                                         <Path x:Name="ScoopLeft" Width="8" Height="8"
                                               HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                                              Margin="-8,0,0,0"
-                                              IsHitTestVisible="False"
+                                              Margin="-8,0,0,0" IsHitTestVisible="False"
                                               Fill="{Binding Background, ElementName=TabBorder}"
                                               Data="M 8,0 A 8,8 0 0 1 0,8 L 8,8 Z"/>
                                         <Path x:Name="ScoopRight" Width="8" Height="8"
                                               HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                              Margin="0,0,-8,0"
-                                              IsHitTestVisible="False"
+                                              Margin="0,0,-8,0" IsHitTestVisible="False"
                                               Fill="{Binding Background, ElementName=TabBorder}"
                                               Data="M 0,0 A 8,8 0 0 0 8,8 L 0,8 Z"/>
                                     </Grid>
                                     <DataTemplate.Triggers>
-                                        <!-- Inactive tabs are light gray; hover brightens one
-                                             step, the active tab is the brightest surface. -->
                                         <Trigger SourceName="TabRoot" Property="IsMouseOver" Value="True">
                                             <Setter TargetName="TabBorder" Property="Background"
-                                                    Value="{DynamicResource SolidBackgroundFillColorBaseBrush}"/>
+                                                    Value="{DynamicResource FileTabs.ChromeHoverBrush}"/>
+                                            <Setter TargetName="CloseButton" Property="Visibility" Value="Visible"/>
                                         </Trigger>
                                         <DataTrigger Binding="{Binding IsActive}" Value="True">
                                             <Setter TargetName="TabBorder" Property="Background"
-                                                    Value="{DynamicResource SolidBackgroundFillColorQuarternaryBrush}"/>
+                                                    Value="{DynamicResource FileTabs.TabActiveBrush}"/>
                                         </DataTrigger>
                                         <DataTrigger Binding="{Binding IsPinned}" Value="True">
                                             <Setter TargetName="CloseButton" Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding TabKind}" Value="Computer">
+                                            <Setter TargetName="TabFolderIcon" Property="Visibility" Value="Collapsed"/>
+                                            <Setter TargetName="TabSymbolIcon" Property="Visibility" Value="Visible"/>
+                                            <Setter TargetName="TabSymbolIcon" Property="Symbol" Value="Desktop24"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding TabKind}" Value="Network">
+                                            <Setter TargetName="TabFolderIcon" Property="Visibility" Value="Collapsed"/>
+                                            <Setter TargetName="TabSymbolIcon" Property="Visibility" Value="Visible"/>
+                                            <Setter TargetName="TabSymbolIcon" Property="Symbol" Value="Globe24"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding TabKind}" Value="RecycleBin">
+                                            <Setter TargetName="TabFolderIcon" Property="Visibility" Value="Collapsed"/>
+                                            <Setter TargetName="TabSymbolIcon" Property="Visibility" Value="Visible"/>
+                                            <Setter TargetName="TabSymbolIcon" Property="Symbol" Value="Delete24"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding TabKind}" Value="Library">
+                                            <Setter TargetName="TabFolderIcon" Property="Visibility" Value="Collapsed"/>
+                                            <Setter TargetName="TabSymbolIcon" Property="Visibility" Value="Visible"/>
+                                            <Setter TargetName="TabSymbolIcon" Property="Symbol" Value="Library24"/>
                                         </DataTrigger>
                                     </DataTemplate.Triggers>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                                        <Button x:Name="NewTabButton" Width="34" Height="34" Padding="0"
-                                                Style="{StaticResource Fluent.IconButton}"
-                                Margin="14,0,0,0" VerticalAlignment="Bottom"
+                            <!-- + 固定在标签区右侧；标签过多时只滚动标签本身。 -->
+                            <Grid HorizontalAlignment="Right" Background="{DynamicResource FileTabs.TitleFillBrush}">
+                                <Button x:Name="NewTabButton" Width="28" Height="30" Padding="0"
+                                        Style="{StaticResource Fluent.IconButton}"
+                                Margin="2,6,0,0" VerticalAlignment="Bottom"
                                 Click="NewTab_Click" ToolTip="New tab (Ctrl+T)">
-                            <ui:SymbolIcon Symbol="Add20" FontSize="14"/>
-                        </Button>
-                    </StackPanel>
+                                    <ui:SymbolIcon Symbol="Add20" FontSize="13"/>
+                                </Button>
+                            </Grid>
+                        </Grid>
+                    </Grid>
                 </Border>
             </ui:TitleBar.Header>
+            <!-- 标签页列表按钮贴在系统窗口按钮左侧：Header 只占内容宽度，
+                 只有 TrailingContent 会一路右对齐到最小化按钮前面。 -->
+            <ui:TitleBar.TrailingContent>
+                <Button x:Name="TabListButton" Width="30" Height="28" Padding="0"
+                        Style="{StaticResource Fluent.IconButton}"
+                        VerticalAlignment="Center" Margin="0,0,6,0"
+                        Click="TabListButton_Click" ToolTip="标签页列表">
+                    <StackPanel Orientation="Horizontal">
+                        <ui:SymbolIcon Symbol="ChevronDown20" FontSize="11"/>
+                        <TextBlock x:Name="TabCountText" Text="0" FontSize="11" Margin="2,0,0,0"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button.ContextMenu>
+                        <ContextMenu x:Name="TabListMenu" Placement="Bottom"
+                                     PlacementTarget="{Binding ElementName=TabListButton}"
+                                     Opened="TabListMenu_Opened"/>
+                    </Button.ContextMenu>
+                </Button>
+            </ui:TitleBar.TrailingContent>
         </ui:TitleBar>
 
-        <!-- Native command bar: compact glyph buttons + address bar -->
-        <Border DockPanel.Dock="Top" Background="Transparent"
-                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
-                BorderThickness="0,0,0,1" Padding="8,6">
-            <DockPanel>
-                <ui:Button x:Name="BackButton" Width="32" Height="32" Padding="0"
-                        Margin="0,0,6,0" Appearance="Transparent" Click="Back_Click" ToolTip="后退">
-                    <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="14"/>
-                </ui:Button>
-                <ui:Button x:Name="ForwardButton" Width="32" Height="32" Padding="0"
-                        Margin="0,0,6,0" Appearance="Transparent" Click="Forward_Click" ToolTip="前进">
-                    <ui:SymbolIcon Symbol="ArrowRight24" FontSize="14"/>
-                </ui:Button>
-                <ui:Button x:Name="UpButton" Width="32" Height="32" Padding="0"
-                        Margin="0,0,6,0" Appearance="Transparent" Click="Up_Click" ToolTip="上一级">
-                    <ui:SymbolIcon Symbol="ArrowUp24" FontSize="14"/>
-                </ui:Button>
-                <ui:Button x:Name="RefreshButton" Width="32" Height="32" Padding="0"
-                        Margin="0,0,6,0" Appearance="Transparent" Click="Refresh_Click" ToolTip="刷新 (F5)">
-                    <ui:SymbolIcon Symbol="ArrowClockwise24" FontSize="14"/>
-                </ui:Button>
+        <!-- 两行命令区：上排文件操作，下排完整地址栏与搜索。 -->
+        <Border DockPanel.Dock="Top" Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{DynamicResource FileTabs.DividerBrush}"
+                BorderThickness="0,0,0,1">
+            <Grid Margin="8,4,8,5">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="30"/>
+                    <RowDefinition Height="4"/>
+                    <RowDefinition Height="32"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                 <!-- Native shell views (This PC, Libraries) place their own
                      command bar inside the view; this is the same set of
                      view choices in one place for every folder. -->
-                <ui:Button x:Name="ViewModeButton" Width="32" Height="32" Padding="0"
-                        Margin="0,0,6,0" Appearance="Transparent"
-                        Click="ViewModeButton_Click" ToolTip="视图">
-                    <ui:Button.ContextMenu>
-                        <ContextMenu x:Name="ViewMenu" Placement="Bottom"
-                                     PlacementTarget="{Binding ElementName=ViewModeButton}"
-                                     Opened="ViewMenu_Opened">
-                            <MenuItem Header="详细信息" Tag="Details" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
-                            <MenuItem Header="列表" Tag="List" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
-                            <MenuItem Header="小图标" Tag="SmallIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
-                            <MenuItem Header="中图标" Tag="Icon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
-                            <MenuItem Header="大图标" Tag="LargeIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
-                            <MenuItem Header="超大图标" Tag="ExtraLargeIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
-                            <MenuItem Header="平铺" Tag="Tile" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
-                            <MenuItem Header="内容" Tag="Content" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
-                            <Separator/>
-                            <MenuItem x:Name="ShowDetailsPaneMenuItem"
-                                      Header="详细信息窗格"
-                                      IsCheckable="True"
-                                      Checked="ShowDetailsPane_Changed"
-                                      Unchecked="ShowDetailsPane_Changed"/>
-                            <MenuItem x:Name="ShowPreviewPaneMenuItem"
-                                      Header="预览窗格"
-                                      IsCheckable="True"
-                                      Checked="ShowPreviewPane_Changed"
-                                      Unchecked="ShowPreviewPane_Changed"/>
-                        </ContextMenu>
-                    </ui:Button.ContextMenu>
-                    <ui:SymbolIcon Symbol="PanelRight20" FontSize="14"/>
-                </ui:Button>
-                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                    <ui:Button x:Name="ToolbarMenuButton" Width="32" Height="32" Padding="0"
-                               Margin="0,0,6,0" Appearance="Transparent"
-                               Click="ToolbarMenuButton_Click"
-                               ToolTip="更多操作">
+                    <Button x:Name="ViewModeButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="ViewModeButton_Click" ToolTip="视图">
+                        <Button.ContextMenu>
+                            <ContextMenu x:Name="ViewMenu" Placement="Bottom"
+                                         PlacementTarget="{Binding ElementName=ViewModeButton}"
+                                         Opened="ViewMenu_Opened">
+                                <MenuItem Header="详细信息" Tag="Details" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                                <MenuItem Header="列表" Tag="List" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                                <MenuItem Header="小图标" Tag="SmallIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                                <MenuItem Header="中图标" Tag="Icon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                                <MenuItem Header="大图标" Tag="LargeIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                                <MenuItem Header="超大图标" Tag="ExtraLargeIcon" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                                <MenuItem Header="平铺" Tag="Tile" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                                <MenuItem Header="内容" Tag="Content" IsCheckable="True" Click="ViewModeMenuItem_Click"/>
+                                <Separator/>
+                                <MenuItem x:Name="ShowDetailsPaneMenuItem"
+                                          Header="详细信息窗格"
+                                          IsCheckable="True"
+                                          Checked="ShowDetailsPane_Changed"
+                                          Unchecked="ShowDetailsPane_Changed"/>
+                                <MenuItem x:Name="ShowPreviewPaneMenuItem"
+                                          Header="预览窗格"
+                                          IsCheckable="True"
+                                          Checked="ShowPreviewPane_Changed"
+                                          Unchecked="ShowPreviewPane_Changed"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                        <ui:SymbolIcon Symbol="PanelRight20" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="NewFolderButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="NewFolderButton_Click" ToolTip="新建文件夹">
+                        <ui:SymbolIcon Symbol="FolderAdd24" FontSize="18"/>
+                    </Button>
+                    <Border Style="{StaticResource FileTabs.CommandSeparator}"/>
+                    <Button x:Name="CutButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="CutButton_Click" ToolTip="剪切">
+                        <ui:SymbolIcon Symbol="Cut24" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="CopyButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="CopyButton_Click" ToolTip="复制">
+                        <ui:SymbolIcon Symbol="Copy24" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="PasteButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="PasteButton_Click" ToolTip="粘贴">
+                        <ui:SymbolIcon Symbol="ClipboardPaste24" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="DeleteButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="DeleteButton_Click" ToolTip="删除到回收站">
+                        <ui:SymbolIcon Symbol="Delete24" FontSize="18"/>
+                    </Button>
+                    <Border Style="{StaticResource FileTabs.CommandSeparator}"/>
+                    <Button x:Name="TerminalButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="OpenTerminal_Click" ToolTip="在终端打开">
+                        <ui:SymbolIcon Symbol="WindowConsole20" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="PropertiesButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="PropertiesButton_Click" ToolTip="属性">
+                        <ui:SymbolIcon Symbol="Info24" FontSize="18"/>
+                    </Button>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="ToolbarMenuButton" Style="{StaticResource FileTabs.CommandButton}"
+                                Click="ToolbarMenuButton_Click"
+                                ToolTip="更多操作">
                         <!-- The menu must hang off an element's ContextMenu property:
                              a ContextMenu placed directly in a panel's children throws
                              "ContextMenu cannot have a logical or visual parent". -->
-                        <ui:Button.ContextMenu>
+                        <Button.ContextMenu>
                             <ContextMenu x:Name="ToolbarMenu" Placement="Bottom"
                                          PlacementTarget="{Binding ElementName=ToolbarMenuButton}">
                                 <MenuItem x:Name="ReopenClosedTabMenuItem"
@@ -284,43 +360,70 @@
                                           Header="在终端打开"
                                           Click="OpenTerminal_Click"
                                           Padding="10,4" MinWidth="180"/>
+                                <MenuItem Header="设置" Click="Settings_Click"
+                                          Padding="10,4" MinWidth="180"/>
                             </ContextMenu>
-                        </ui:Button.ContextMenu>
-                        <ui:SymbolIcon Symbol="MoreHorizontal20" FontSize="14"/>
-                    </ui:Button>
-                    <ui:Button x:Name="DropPointButton" Width="32" Height="32" Padding="0"
-                            Margin="0,0,6,0" Appearance="Transparent"
+                        </Button.ContextMenu>
+                        <ui:SymbolIcon Symbol="MoreHorizontal20" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="DropPointButton" Style="{StaticResource FileTabs.CommandButton}"
                             Click="DropPointButton_Click"
                             ToolTip="DropPoint 拖放中转 (Shift+CapsLock)">
-                        <ui:SymbolIcon Symbol="Drag24" FontSize="14"/>
-                    </ui:Button>
-                    <ui:Button x:Name="RecentLocationsButton" Width="32" Height="32" Padding="0"
-                            Margin="0,0,6,0" Appearance="Transparent"
+                        <ui:SymbolIcon Symbol="Drag24" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="RecentLocationsButton" Style="{StaticResource FileTabs.CommandButton}"
                             Click="RecentLocationsButton_Click"
                             ToolTip="最近访问 (Ctrl+H)">
-                        <ui:SymbolIcon Symbol="History20" FontSize="14"/>
+                        <ui:SymbolIcon Symbol="History20" FontSize="18"/>
+                    </Button>
+                    <ui:Button x:Name="AiButton" Height="30" Appearance="Transparent"
+                               Margin="6,0,2,0" Padding="7,0"
+                               Click="AiButton_Click" ToolTip="AI 助手">
+                        <StackPanel Orientation="Horizontal">
+                            <ui:SymbolIcon Symbol="Sparkle24" FontSize="13" Foreground="#3A7CB8"/>
+                            <TextBlock Text="AI" Margin="3,0,0,0" FontSize="12"
+                                       Foreground="{DynamicResource FileTabs.ChromeMutedTextBrush}"/>
+                        </StackPanel>
                     </ui:Button>
+                </StackPanel>
+                </Grid>
+
+                <!-- 第二行：导航按钮 + 地址 + 搜索。 -->
+                <DockPanel Grid.Row="2">
+                    <Button x:Name="BackButton" DockPanel.Dock="Left"
+                            Style="{StaticResource FileTabs.CommandButton}"
+                            Click="Back_Click" ToolTip="后退">
+                        <ui:SymbolIcon Symbol="ArrowLeft24" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="ForwardButton" DockPanel.Dock="Left"
+                            Style="{StaticResource FileTabs.CommandButton}"
+                            Click="Forward_Click" ToolTip="前进">
+                        <ui:SymbolIcon Symbol="ArrowRight24" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="UpButton" DockPanel.Dock="Left"
+                            Style="{StaticResource FileTabs.CommandButton}"
+                            Click="Up_Click" ToolTip="上一级">
+                        <ui:SymbolIcon Symbol="ArrowUp24" FontSize="18"/>
+                    </Button>
+                    <Border DockPanel.Dock="Left" Style="{StaticResource FileTabs.CommandSeparator}"/>
+                    <StackPanel x:Name="SearchPanel" DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                     <ui:TextBox x:Name="SearchBox"
-                                Width="240" Height="32"
+                                Width="228" Height="32"
                                 IconPlacement="Left"
                                 Icon="{ui:SymbolIcon Symbol=Search20, FontSize=14}"
-                                PlaceholderText="搜索"
+                                PlaceholderText="在此电脑中搜索"
                                 ClearButtonEnabled="True"
                                 VerticalContentAlignment="Center"
                                 ToolTip="Everything search"
                                 TextChanged="SearchBox_TextChanged" KeyDown="SearchBox_KeyDown"/>
-                    <ui:Button x:Name="SearchToggleButton" Width="32" Height="32" Padding="0"
-                               Appearance="Transparent"
-                               Background="Transparent"
-                               MouseOverBackground="Transparent"
-                               MouseOverBorderBrush="Transparent"
-                               PressedBackground="Transparent"
-                               PressedBorderBrush="Transparent"
-                               Click="SearchToggleButton_Click"
-                               ToolTip="搜索 (Ctrl+F)">
-                        <ui:SymbolIcon Symbol="Search20" FontSize="14"/>
-                    </ui:Button>
+                    <!-- 窄窗口时藏起搜索框，只留这个搜索图标。 -->
                 </StackPanel>
+                    <Button x:Name="SearchToggleButton" DockPanel.Dock="Right" Width="30" Height="30" Padding="0"
+                            Style="{StaticResource FileTabs.IconButtonBase}"
+                            Click="SearchToggleButton_Click"
+                            ToolTip="搜索 (Ctrl+F)">
+                        <ui:SymbolIcon Symbol="Search20" FontSize="14"/>
+                    </Button>
                 <Popup x:Name="RecentLocationsPopup" PlacementTarget="{Binding ElementName=RecentLocationsButton}"
                        Placement="Bottom" StaysOpen="False" AllowsTransparency="True">
                     <Border Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
@@ -388,17 +491,40 @@
 
                 <!-- Breadcrumb path editor: inline path segments when not editing;
                      swap in the plain TextBox on focus / Escape. -->
-                <Grid x:Name="AddressArea" VerticalAlignment="Center" Margin="0,0,6,0" MinWidth="120">
-                    <TextBox x:Name="AddressBox" Height="32" VerticalContentAlignment="Center"
+                <Grid x:Name="AddressArea" VerticalAlignment="Center" Margin="0,0,8,0" MinWidth="120">
+                    <Border x:Name="AddressFrame" Height="32"
+                            Background="{DynamicResource FileTabs.FieldFillBrush}"
+                            BorderBrush="{DynamicResource FileTabs.DividerBrush}"
+                            BorderThickness="1" CornerRadius="4">
+                    <Grid>
+                    <!-- 地址栏末尾的刷新与复制路径；两者都盖在面包屑之上，
+                         不会挤占路径可显示的长度。 -->
+                    <Border x:Name="AddressTail" HorizontalAlignment="Right"
+                            Margin="0,0,2,0" Padding="4,0,2,0"
+                            VerticalAlignment="Stretch"
+                            Background="{DynamicResource FileTabs.FieldFillBrush}">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button x:Name="CopyPathButton" Width="22" Height="22" Padding="1" Margin="0,0,1,0"
+                                    Style="{StaticResource FileTabs.IconButtonBase}"
+                                    Click="CopyAddress_Click" ToolTip="复制当前路径">
+                                <ui:SymbolIcon Symbol="Copy20" FontSize="11"/>
+                            </Button>
+                            <Button x:Name="RefreshButton" Width="24" Height="24" Padding="0"
+                                    Style="{StaticResource FileTabs.IconButtonBase}"
+                                    Click="Refresh_Click" ToolTip="刷新 (F5)">
+                                <ui:SymbolIcon Symbol="ArrowClockwise20" FontSize="13"/>
+                            </Button>
+                        </StackPanel>
+                    </Border>
+                    <TextBox x:Name="AddressBox" Style="{StaticResource FileTabs.AddressBox}"
                              Visibility="Collapsed"
+                             Padding="8,0,58,0"
                              TextChanged="AddressBox_TextChanged"
                              LostKeyboardFocus="AddressBox_LostKeyboardFocus"
                              PreviewKeyDown="AddressBox_PreviewKeyDown"
                              KeyDown="AddressBox_KeyDown"/>
-                    <Border x:Name="BreadcrumbBar" Height="32"
-                            Background="{DynamicResource ControlFillColorDefaultBrush}"
-                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
-                            BorderThickness="1" CornerRadius="4" Padding="6,0"
+                    <!-- 右侧留出 56px 给 AddressTail，避免长路径压到按钮下面。 -->
+                    <Border x:Name="BreadcrumbBar" Background="Transparent" Padding="8,0,56,0"
                             MouseLeftButtonDown="BreadcrumbBar_MouseLeftButtonDown">
                         <Border.ContextMenu>
                             <ContextMenu>
@@ -415,10 +541,10 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="›" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                        <TextBlock Text="›" Foreground="{DynamicResource FileTabs.ChromeMutedTextBrush}"
                                                    VerticalAlignment="Center" Margin="0,0,4,0"/>
                                         <TextBlock Text="{Binding Label}"
-                                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                                   Foreground="{DynamicResource FileTabs.ChromeTextBrush}"
                                                    VerticalAlignment="Center" Cursor="Hand"
                                                    MouseLeftButtonDown="BreadcrumbPart_Click"/>
                                     </StackPanel>
@@ -426,23 +552,36 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                     </Border>
+                    </Grid>
+                    </Border>
                 </Grid>
             </DockPanel>
+            </Grid>
         </Border>
 
-        <!-- bookmark bar (drop target for files/folders) -->
-        <Border x:Name="BookmarkBar" DockPanel.Dock="Top" Background="Transparent"
-                BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
-                BorderThickness="0,0,0,1" Padding="6,3"
+        <!-- 书签栏：底色与上方命令区共用同一个画刷（浅色为 #F3F3F3），
+             黄色星形收藏标记，书签用文件夹图形和细竖线分隔。 -->
+        <Border x:Name="BookmarkBar" DockPanel.Dock="Top"
+                Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{DynamicResource FileTabs.DividerBrush}"
+                BorderThickness="0,0,0,1"
                 AllowDrop="True" DragOver="BookmarkBar_DragOver" Drop="BookmarkBar_Drop"
                 PreviewMouseMove="BookmarkStrip_PreviewMouseMove"
                 MouseLeftButtonUp="BookmarkStrip_MouseLeftButtonUp">
-            <DockPanel>
-                <TextBlock x:Name="BookmarkEmptyHint"
-                           Text="可拖动文档、软件、文件夹到此,点击快速打开"
-                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+            <DockPanel Height="32" Margin="8,0">
+                <!-- 书签内容只占滚动区 32px 中的上面 28px，居中会低 2px；
+                     这里按内容行中心（14px）定位，星形也比文件夹图标略小。 -->
+                <Path DockPanel.Dock="Left" Width="12" Height="12" Margin="7,8,7,0"
+                      VerticalAlignment="Top" Stretch="Uniform"
+                      Fill="#F6B93B" Stroke="#E3A21C" StrokeThickness="0.6"
+                      Data="M 8,1 L 10,5.7 L 15,6.3 L 11.4,9.6 L 12.4,14.6 L 8,12.1 L 3.6,14.6 L 4.6,9.6 L 1,6.3 L 6,5.7 Z"
+                      ToolTip="收藏"/>
+                <TextBlock DockPanel.Dock="Right" x:Name="BookmarkEmptyHint"
+                           Text="可拖动文档、软件、文件夹到此，点击快速打开"
+                           FontSize="11"
+                           Foreground="{DynamicResource FileTabs.ChromeMutedTextBrush}"
                            VerticalAlignment="Center" Margin="4,0"/>
-                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <ScrollViewer x:Name="BookmarkScroll" Style="{StaticResource FileTabs.BookmarkScroll}">
                     <ItemsControl x:Name="BookmarkStrip">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -451,36 +590,38 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Padding="8,3" Margin="1,0" Cursor="Hand"
-                                           MouseDown="Bookmark_MouseDown" ToolTip="{Binding Path}">
-                                    <TextBlock.ContextMenu>
-                                        <ContextMenu>
-                                            <MenuItem Header="打开" Click="BookmarkOpen_Click"/>
-                                            <MenuItem Header="在新标签页打开" Click="BookmarkOpenNewTab_Click"/>
-                                            <MenuItem Header="打开所在位置" Click="BookmarkOpenContaining_Click"/>
-                                            <Separator/>
-                                            <MenuItem Header="重命名" Click="BookmarkRename_Click"/>
-                                            <MenuItem Header="删除书签" Click="BookmarkDelete_Click"/>
-                                        </ContextMenu>
-                                    </TextBlock.ContextMenu>
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground"
-                                                    Value="{DynamicResource TextFillColorPrimaryBrush}"/>
-                                            <Style.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter Property="Background"
-                                                            Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
-                                                </Trigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                    <TextBlock.Text>
-                                        <Binding Path="Name" StringFormat="{}{0}"/>
-                                    </TextBlock.Text>
-                                    <TextBlock.MaxWidth>160</TextBlock.MaxWidth>
-                                    <TextBlock.TextTrimming>CharacterEllipsis</TextBlock.TextTrimming>
-                                </TextBlock>
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Style="{StaticResource FileTabs.BookmarkItem}"
+                                            MouseDown="Bookmark_MouseDown" ToolTip="{Binding Path}">
+                                        <Border.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="打开" Click="BookmarkOpen_Click"/>
+                                                <MenuItem Header="在新标签页打开" Click="BookmarkOpenNewTab_Click"/>
+                                                <MenuItem Header="打开所在位置" Click="BookmarkOpenContaining_Click"/>
+                                                <Separator/>
+                                                <MenuItem Header="重命名" Click="BookmarkRename_Click"/>
+                                                <MenuItem Header="删除书签" Click="BookmarkDelete_Click"/>
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path x:Name="BookmarkIcon" Style="{StaticResource FileTabs.BookmarkIcon}"/>
+                                            <TextBlock Text="{Binding Name}" FontSize="12"
+                                                       MaxWidth="160" VerticalAlignment="Center"
+                                                       MinWidth="0"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource FileTabs.ChromeTextBrush}"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Width="1" Height="14" Margin="4,0" VerticalAlignment="Center"
+                                            Background="{DynamicResource FileTabs.DividerBrush}"/>
+                                </StackPanel>
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsFolder}" Value="False">
+                                        <Setter TargetName="BookmarkIcon" Property="Fill" Value="#E9EDF2"/>
+                                        <Setter TargetName="BookmarkIcon" Property="Stroke" Value="#97A6B6"/>
+                                        <Setter TargetName="BookmarkIcon" Property="StrokeThickness" Value="1"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
@@ -513,7 +654,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="5"/>
-                <ColumnDefinition Width="0" MinWidth="0"/>
+                <ColumnDefinition x:Name="SearchResultsColumn" Width="0" MinWidth="0"/>
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
                 <RowDefinition x:Name="BodyRow" Height="*"/>
@@ -592,7 +733,7 @@
                           ResizeBehavior="PreviousAndNext" ResizeDirection="Columns"
                           Visibility="Collapsed"/>
 
-            <Border x:Name="SearchResultsPanel" Grid.Column="2" Width="280"
+            <Border x:Name="SearchResultsPanel" Grid.Column="2"
                     Grid.RowSpan="2"
                     Background="{DynamicResource SolidBackgroundFillColorQuarternaryBrush}"
                     BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"

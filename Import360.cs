@@ -57,7 +57,12 @@ public static class Import360
                 var path = PidlToPath(pidl);
                 if (!string.IsNullOrEmpty(path))
                 {
-                    result.Add(new Bookmark { Name = name.Length > 0 ? name : path, Path = path });
+                    result.Add(new Bookmark
+                    {
+                        Name = name.Length > 0 ? name : path,
+                        Path = path,
+                        IsFolder = Directory.Exists(path),
+                    });
                 }
             }
             catch (Exception)

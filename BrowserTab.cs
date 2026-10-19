@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Forms.Integration;
@@ -37,9 +38,29 @@ public sealed class BrowserTab : INotifyPropertyChanged
     private readonly string _initialPath;
     private bool _initialNavigationDone;
 
+    // ExplorerBrowserNavigationLog keeps its history in private managed
+    // fields; the package does not expose a way to remove one synthetic
+    // navigation after a pane rebuild.
+    private static readonly FieldInfo? NavigationLogLocationsField =
+        typeof(ExplorerBrowserNavigationLog).GetField(
+            "_locations",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
+    private static readonly FieldInfo? NavigationLogCurrentIndexField =
+        typeof(ExplorerBrowserNavigationLog).GetField(
+            "currentLocationIndex",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+
     private string _title = "New tab";
     private bool _isActive;
     private bool _isPinned;
+    private string _tabKind = "Folder";
+    private ShellObject? _paneRebuildTarget;
+    private List<ShellObject>? _historyBeforePaneRebuild;
+    private int _historyIndexBeforePaneRebuild;
+    private string? _paneRebuildEscapePath;
+    private string? _paneRebuildTargetPath;
+    private bool _paneRebuildReturnStarted;
 
     public string Title
     {
@@ -75,6 +96,21 @@ public sealed class BrowserTab : INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Folder / Computer / Network / RecycleBin / Library.
+    /// The tab template maps this to a glyph; a string avoids depending on
+    /// WPF UI's symbol enum in the view model.
+    /// </summary>
+    public string TabKind
+    {
+        get => _tabKind;
+        private set
+        {
+            _tabKind = value;
+            OnPropertyChanged();
+        }
+    }
+
     public BrowserTab(string initialPath)
     {
         _initialPath = initialPath;
@@ -104,9 +140,11 @@ public sealed class BrowserTab : INotifyPropertyChanged
             Title = !string.IsNullOrWhiteSpace(e.NewLocation?.Name)
                 ? e.NewLocation!.Name
                 : e.NewLocation?.ParsingName ?? string.Empty;
+            TabKind = KindFor(e.NewLocation?.ParsingName);
             // Navigation rebuilds the DirectUI view; reapply without it the
             // new shell surface follows the light system theme again.
             ApplyShellTheme();
+            ContinuePaneRebuild(e.NewLocation);
             SelectionStateChanged?.Invoke(this, EventArgs.Empty);
         };
         Browser.HandleCreated += (_, _) =>
@@ -144,6 +182,19 @@ public sealed class BrowserTab : INotifyPropertyChanged
         {
             ThemeManager.ApplyShellTheme(Browser.Handle);
         }
+    }
+
+    private static string KindFor(string? parsingName)
+    {
+        if (string.IsNullOrEmpty(parsingName)) return "Folder";
+        if (parsingName.Equals(ThisPc, StringComparison.OrdinalIgnoreCase)) return "Computer";
+        if (parsingName.Contains("F02C1A0D-BE21-4350-88B0-7367FC96EF3C",
+                StringComparison.OrdinalIgnoreCase)) return "Network";
+        if (parsingName.Contains("645FF040-5081-101B-9F08-00AA002F954E",
+                StringComparison.OrdinalIgnoreCase)) return "RecycleBin";
+        if (parsingName.Contains("031E4825-7B94-4DC3-B131-E946B44C8DD5",
+                StringComparison.OrdinalIgnoreCase)) return "Library";
+        return "Folder";
     }
 
     public void ApplyNativeSidebarVisibility(bool visible)
@@ -196,20 +247,93 @@ public sealed class BrowserTab : INotifyPropertyChanged
     {
         if (Browser.NavigationLog.CurrentLocation is not { } location) return;
 
-        // ExplorerBrowser treats a navigation to the current location as a
-        // no-op unless AlwaysNavigate is set. Pane visibility is queried while
-        // the shell creates the view, so the same-location navigation must be
-        // forced for a toggle to take effect.
-        var alwaysNavigate = Browser.NavigationOptions.AlwaysNavigate;
-        Browser.NavigationOptions.AlwaysNavigate = true;
-        try
+        // Pane visibility is read while the shell creates its view. Navigating
+        // to the same location reuses the existing view even with
+        // AlwaysNavigate, so briefly visit another location and come back.
+        var escapePath = EscapeLocation(location.ParsingName);
+        CaptureHistoryBeforePaneRebuild(location, escapePath);
+        Browser.Navigate(ShellObject.FromParsingName(escapePath));
+    }
+
+    private void CaptureHistoryBeforePaneRebuild(ShellObject target, string escapePath)
+    {
+        if (NavigationLogLocationsField?.GetValue(Browser.NavigationLog) is not List<ShellObject> locations)
         {
-            Browser.Navigate(location);
+            return;
         }
-        finally
+
+        _paneRebuildTarget = target;
+        _historyBeforePaneRebuild = new List<ShellObject>(locations);
+        _historyIndexBeforePaneRebuild = Browser.NavigationLog.CurrentLocationIndex;
+        _paneRebuildEscapePath = escapePath;
+        _paneRebuildTargetPath = target.ParsingName;
+        _paneRebuildReturnStarted = false;
+    }
+
+    private void ContinuePaneRebuild(ShellObject? newLocation)
+    {
+        if (_paneRebuildTarget is not { } target || _paneRebuildTargetPath is null) return;
+
+        var parsingName = newLocation?.ParsingName;
+        if (!_paneRebuildReturnStarted)
         {
-            Browser.NavigationOptions.AlwaysNavigate = alwaysNavigate;
+            if (!string.Equals(parsingName, _paneRebuildEscapePath, StringComparison.OrdinalIgnoreCase))
+            {
+                ClearPaneRebuild();
+                return;
+            }
+
+            // The first navigation must finish before the second one is issued;
+            // back-to-back Navigate calls are dropped by the shell control.
+            _paneRebuildReturnStarted = true;
+            Browser.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    if (!Browser.IsDisposed) Browser.Navigate(target);
+                }
+                catch (Exception)
+                {
+                    ClearPaneRebuild();
+                }
+            }));
+            return;
         }
+
+        if (string.Equals(parsingName, _paneRebuildTargetPath, StringComparison.OrdinalIgnoreCase) &&
+            NavigationLogLocationsField?.GetValue(Browser.NavigationLog) is List<ShellObject> locations &&
+            _historyBeforePaneRebuild is { } originalHistory)
+        {
+            locations.Clear();
+            locations.AddRange(originalHistory);
+            NavigationLogCurrentIndexField?.SetValue(
+                Browser.NavigationLog,
+                _historyIndexBeforePaneRebuild);
+        }
+        ClearPaneRebuild();
+    }
+
+    private void ClearPaneRebuild()
+    {
+        _paneRebuildTarget = null;
+        _historyBeforePaneRebuild = null;
+        _paneRebuildEscapePath = null;
+        _paneRebuildTargetPath = null;
+        _paneRebuildReturnStarted = false;
+    }
+
+    private static string EscapeLocation(string current)
+    {
+        var candidates = new[]
+        {
+            ThisPc,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+        };
+        return candidates.FirstOrDefault(candidate =>
+                   !string.IsNullOrWhiteSpace(candidate) &&
+                   !string.Equals(candidate, current, StringComparison.OrdinalIgnoreCase))
+               ?? ThisPc;
     }
 
     public void SetViewMode(ExplorerBrowserViewMode mode, int? thumbnailSize = null)

@@ -9,6 +9,184 @@
                 <ui:ControlsDictionary />
             </ResourceDictionary.MergedDictionaries>
 
+        <!-- 360 文件夹式浅蓝灰标题区。用 FluentWindow.ThemeDictionaries 覆盖
+             同一组键实现深色主题，这样 WPF UI 切换主题时也能跟着换。 -->
+        <SolidColorBrush x:Key="FileTabs.ChromeFillBrush" Color="#DFE8F1"/>
+        <SolidColorBrush x:Key="FileTabs.ChromeHoverBrush" Color="#D3DEEA"/>
+        <SolidColorBrush x:Key="FileTabs.ChromePressedBrush" Color="#C2D0DF"/>
+        <!-- 未激活标签与标题区同色：只有激活标签是白的，外圆角才读得出来。 -->
+        <SolidColorBrush x:Key="FileTabs.TabInactiveBrush" Color="#DFE8F1"/>
+        <SolidColorBrush x:Key="FileTabs.TabActiveBrush" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="FileTabs.BookmarkFillBrush" Color="#EAF0F6"/>
+        <SolidColorBrush x:Key="FileTabs.BookmarkHoverBrush" Color="#D9E4EF"/>
+        <SolidColorBrush x:Key="FileTabs.DividerBrush" Color="#C4D2E0"/>
+        <!-- 标签间隙与标题区同色，让标签像从标题栏长出来。 -->
+        <SolidColorBrush x:Key="FileTabs.TitleFillBrush" Color="#DFE8F1"/>
+        <SolidColorBrush x:Key="FileTabs.FieldFillBrush" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="FileTabs.FieldHoverBrush" Color="#F7FAFC"/>
+        <SolidColorBrush x:Key="FileTabs.ChromeTextBrush" Color="#1F2329"/>
+        <SolidColorBrush x:Key="FileTabs.ChromeMutedTextBrush" Color="#5F6670"/>
+        <SolidColorBrush x:Key="FileTabs.ScrollThumbBrush" Color="#A9B8C8"/>
+        <SolidColorBrush x:Key="FileTabs.SettingsCardBrush" Color="#F7F9FB"/>
+        <SolidColorBrush x:Key="FileTabs.SettingsCardBorderBrush" Color="#E3E9EF"/>
+
+        <!-- 局部资源字典无法 StaticResource 引用更早的 Fluent.IconButton，
+             所以这里重新声明同一套幽灵按钮外观，仅在悬停时出现底色。 -->
+        <Style x:Key="FileTabs.IconButtonBase" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="HorizontalContentAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bg" Background="Transparent" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background"
+                                        Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bg" Property="Background"
+                                        Value="{DynamicResource SubtleFillColorTertiaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FileTabs.CommandButton" TargetType="Button"
+               BasedOn="{StaticResource FileTabs.IconButtonBase}">
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Margin" Value="0,0,2,0"/>
+            <Setter Property="Foreground" Value="{DynamicResource FileTabs.ChromeMutedTextBrush}"/>
+            <Setter Property="IsTabStop" Value="False"/>
+        </Style>
+
+        <!-- 工具栏分组线：宽度和间距固定，避免不同按钮组看起来像随机换行。 -->
+        <Style x:Key="FileTabs.CommandSeparator" TargetType="Border">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Margin" Value="4,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="{DynamicResource FileTabs.DividerBrush}"/>
+        </Style>
+
+        <!-- 书签项：整块可点，由 MainWindow 的鼠标处理负责拖动排序。 -->
+        <Style x:Key="FileTabs.BookmarkItem" TargetType="Border">
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource FileTabs.BookmarkHoverBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- 地址栏：普通输入框去掉 Fluent 的粗焦点描边，与 360 的细框一致。 -->
+        <Style x:Key="FileTabs.AddressBox" TargetType="TextBox">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource FileTabs.ChromeTextBrush}"/>
+            <Setter Property="CaretBrush" Value="{DynamicResource FileTabs.ChromeTextBrush}"/>
+            <Setter Property="SelectionBrush" Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                                      VerticalAlignment="Center"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 书签栏横向滚动：隐藏两侧原生箭头，换成 360 式的细滚动条。 -->
+        <Style x:Key="FileTabs.BookmarkScroll" TargetType="ScrollViewer">
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="VerticalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollViewer">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="28"/>
+                                <RowDefinition Height="4"/>
+                            </Grid.RowDefinitions>
+                            <ScrollContentPresenter Margin="{TemplateBinding Padding}"
+                                                    Content="{TemplateBinding Content}"
+                                                    ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                    VerticalAlignment="Center"/>
+                            <ScrollBar x:Name="PART_HorizontalScrollBar"
+                                       Grid.Row="1" Orientation="Horizontal"
+                                       Minimum="0" Maximum="{TemplateBinding ScrollableWidth}"
+                                       ViewportSize="{TemplateBinding ViewportWidth}"
+                                       Value="{TemplateBinding HorizontalOffset}"
+                                       Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}"
+                                       Height="4" Margin="2,0">
+                                <ScrollBar.Template>
+                                    <ControlTemplate TargetType="ScrollBar">
+                                        <Track x:Name="PART_Track" Orientation="Horizontal">
+                                            <Track.Thumb>
+                                                <Thumb Height="4">
+                                                    <Thumb.Template>
+                                                        <ControlTemplate TargetType="Thumb">
+                                                            <Border CornerRadius="2"
+                                                                    Background="{DynamicResource FileTabs.ScrollThumbBrush}"/>
+                                                        </ControlTemplate>
+                                                    </Thumb.Template>
+                                                </Thumb>
+                                            </Track.Thumb>
+                                        </Track>
+                                    </ControlTemplate>
+                                </ScrollBar.Template>
+                            </ScrollBar>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="ComputedHorizontalScrollBarVisibility" Value="Collapsed">
+                                <Setter TargetName="PART_HorizontalScrollBar" Property="Height" Value="0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FileTabs.TabFolderIcon" TargetType="Path">
+            <Setter Property="Data" Value="M 1,4 L 6,4 L 7.5,5.5 L 15,5.5 L 15,13 L 1,13 Z"/>
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="14"/>
+            <Setter Property="Stretch" Value="Fill"/>
+            <Setter Property="StrokeThickness" Value="0"/>
+            <Setter Property="Fill" Value="#F4BE45"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="FileTabs.BookmarkIcon" TargetType="Path">
+            <Setter Property="Data" Value="M 1,4 L 6,4 L 7.5,5.5 L 15,5.5 L 15,13 L 1,13 Z"/>
+            <Setter Property="Width" Value="15"/>
+            <Setter Property="Height" Value="13"/>
+            <Setter Property="Stretch" Value="Fill"/>
+            <Setter Property="StrokeThickness" Value="0"/>
+            <Setter Property="Fill" Value="#F5C243"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+        </Style>
+
         <!-- Stock WPF controls kept in dialogs and popups get a flat Fluent
              look. All colors reference WPF UI theme keys, so switching the
              light/dark theme repaints them without a second palette living
@@ -19,6 +197,7 @@
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="Focusable" Value="False"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">

@@ -1,6 +1,7 @@
 <Window x:Class="FileTabs.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         Title="FileTabs 设置" Width="560" Height="640"
         WindowStartupLocation="CenterOwner"
         MaxHeight="720"
@@ -11,6 +12,119 @@
         Foreground="{DynamicResource TextFillColorPrimaryBrush}"
         FontFamily="{x:Static SystemFonts.MessageFontFamily}"
         FontSize="{x:Static SystemFonts.MessageFontSize}">
+    <Window.Resources>
+        <!-- 设置页也使用和主窗口一致的 4/8px 节奏，避免每个区块靠猜间距。 -->
+        <Style x:Key="SettingsSection" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource FileTabs.SettingsCardBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource FileTabs.SettingsCardBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="16"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+
+        <Style x:Key="SettingsSectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+        </Style>
+
+        <Style x:Key="SettingsFieldLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+        </Style>
+
+        <Style x:Key="SettingsHint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
+
+        <Style x:Key="SettingsCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+        </Style>
+
+        <!-- WPF-UI 的 ComboBox 默认模板在 30px 高度下只给内容 12px，
+             中文字符会被上下裁切。设置页统一换成 30px 高的原生可编辑区模板。 -->
+        <Style x:Key="SettingsComboBoxItem" TargetType="ComboBoxItem">
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="MinHeight" Value="30"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="SettingsComboBox" TargetType="ComboBox">
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
+            <Setter Property="Background" Value="{DynamicResource ControlFillColorDefaultBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource ControlStrokeColorDefaultBrush}"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource SettingsComboBoxItem}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <Border x:Name="border"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="1" CornerRadius="4"/>
+                            <ContentPresenter Margin="10,0,32,0"
+                                              HorizontalAlignment="Left"
+                                              VerticalAlignment="Center"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                              IsHitTestVisible="False"/>
+                            <ToggleButton x:Name="toggle"
+                                          Background="Transparent"
+                                          BorderThickness="0"
+                                          Focusable="False"
+                                          ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="Transparent"/>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ui:SymbolIcon Symbol="ChevronDown20" FontSize="11"
+                                           HorizontalAlignment="Right" VerticalAlignment="Center"
+                                           Margin="0,0,11,0" IsHitTestVisible="False"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                            <Popup x:Name="PART_Popup"
+                                   Placement="Bottom"
+                                   AllowsTransparency="True"
+                                   Focusable="False"
+                                   PopupAnimation="Fade"
+                                   IsOpen="{TemplateBinding IsDropDownOpen}">
+                                <Border Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                                        BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                        BorderThickness="1" CornerRadius="6"
+                                        Padding="4"
+                                        MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <ItemsPresenter/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background"
+                                        Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
@@ -19,87 +133,130 @@
         <ScrollViewer Grid.Row="0"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
-            <StackPanel Margin="16,12,16,16">
-            <TextBlock Text="外观" FontWeight="SemiBold"/>
-            <TextBlock Text="主题" Margin="0,8,0,0"/>
-            <ComboBox x:Name="ThemeCombo" Margin="0,6,0,0"
-                      SelectedIndex="2" Height="30">
-                <ComboBoxItem Content="浅色"/>
-                <ComboBoxItem Content="深色"/>
-                <ComboBoxItem Content="跟随系统"/>
-            </ComboBox>
-            <CheckBox x:Name="ShowPreviewPaneCheckBox" Content="显示预览面板"
-                      Margin="0,14,0,0"
-                      Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-            <CheckBox x:Name="ShowNativeCommandBarCheckBox" Content="显示原生命令栏"
-                      Margin="0,8,0,0"
-                      Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-            <TextBlock Text="显示 Windows Explorer 自带的“新建 / 复制 / 排序 / 查看”等命令按钮。"
-                       Margin="28,2,0,0" TextWrapping="Wrap" Opacity="0.7"/>
+            <StackPanel Margin="20,16,20,20">
+                <Border Style="{StaticResource SettingsSection}">
+                    <StackPanel>
+                        <TextBlock Text="外观" Style="{StaticResource SettingsSectionTitle}"/>
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="96"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="主题" Style="{StaticResource SettingsFieldLabel}"/>
+                            <ComboBox x:Name="ThemeCombo" Grid.Column="1"
+                                      Style="{StaticResource SettingsComboBox}"
+                                      SelectedIndex="2">
+                                <ComboBoxItem Content="浅色"/>
+                                <ComboBoxItem Content="深色"/>
+                                <ComboBoxItem Content="跟随系统"/>
+                            </ComboBox>
+                            <CheckBox x:Name="ShowPreviewPaneCheckBox" Grid.Row="1" Grid.Column="1"
+                                      Content="显示预览面板" Style="{StaticResource SettingsCheckBox}"
+                                      Margin="0,12,0,0"/>
+                            <CheckBox x:Name="ShowNativeCommandBarCheckBox" Grid.Row="2" Grid.Column="1"
+                                      Content="显示原生命令栏" Style="{StaticResource SettingsCheckBox}"
+                                      Margin="0,8,0,0"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1"
+                                       Text="显示 Windows Explorer 自带的“新建 / 复制 / 排序 / 查看”等命令按钮。"
+                                       Style="{StaticResource SettingsHint}"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
 
-            <TextBlock Text="启动" FontWeight="SemiBold" Margin="0,22,0,0"/>
-            <CheckBox x:Name="StartWithWindowsCheckBox"
-                      Content="登录 Windows 时自动启动 FileTabs"
-                      Margin="0,10,0,0"
-                      Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-            <CheckBox x:Name="RestoreLastSessionCheckBox"
-                      Content="启动时恢复上次打开的标签页"
-                      Margin="0,8,0,0"
-                      Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                <Border Style="{StaticResource SettingsSection}">
+                    <StackPanel>
+                        <TextBlock Text="启动" Style="{StaticResource SettingsSectionTitle}"/>
+                        <CheckBox x:Name="StartWithWindowsCheckBox"
+                                  Content="登录 Windows 时自动启动 FileTabs"
+                                  Style="{StaticResource SettingsCheckBox}"
+                                  Margin="0,12,0,0"/>
+                        <CheckBox x:Name="RestoreLastSessionCheckBox"
+                                  Content="启动时恢复上次打开的标签页"
+                                  Style="{StaticResource SettingsCheckBox}"
+                                  Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
 
-            <TextBlock Text="新标签页" FontWeight="SemiBold" Margin="0,22,0,0"/>
-            <TextBlock Text="默认路径" Margin="0,8,0,0"/>
-            <Grid Margin="0,6,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <TextBox x:Name="NewTabPathBox" Height="28" VerticalContentAlignment="Center"/>
-                <Button Grid.Column="1" Content="浏览…" Width="64" Height="28"
-                        Click="Browse_Click" Margin="6,0,0,0"/>
-            </Grid>
+                <Border Style="{StaticResource SettingsSection}">
+                    <StackPanel>
+                        <TextBlock Text="新标签页" Style="{StaticResource SettingsSectionTitle}"/>
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="96"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="默认路径" Style="{StaticResource SettingsFieldLabel}"/>
+                            <TextBox x:Name="NewTabPathBox" Grid.Column="1"
+                                     Height="30" VerticalContentAlignment="Center"/>
+                            <Button Grid.Column="2" Content="浏览…" Width="68" Height="30"
+                                    Click="Browse_Click" Margin="8,0,0,0"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
 
-            <TextBlock Text="系统集成" FontWeight="SemiBold" Margin="0,22,0,0"/>
-            <CheckBox x:Name="CaptureExplorerCheckBox"
-                      Content="接管新打开的文件资源管理器窗口"
-                      Margin="0,10,0,0"
-                      Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-            <TextBlock Text="Win+E / 双击文件夹打开的资源管理器窗口会转为 FileTabs 标签页；按住 Ctrl+Shift 打开可临时绕过。"
-                       Margin="28,2,0,0" TextWrapping="Wrap" Opacity="0.7"/>
-            <CheckBox x:Name="RedirectFoldersCheckBox"
-                      Content="双击文件夹 / 驱动器时用 FileTabs 打开"
-                      Margin="0,12,0,0"
-                      Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-            <TextBlock Text="通过当前用户的注册表重定向，无需管理员权限，可随时取消。"
-                       Margin="28,2,0,0" TextWrapping="Wrap" Opacity="0.7"/>
-            <TextBlock Text="打开终端时使用" Margin="0,14,0,0"/>
-            <ComboBox x:Name="TerminalCombo" Margin="0,6,0,0"
-                      SelectedIndex="0" Height="30">
-                <ComboBoxItem Content="Windows Terminal"/>
-                <ComboBoxItem Content="PowerShell"/>
-                <ComboBoxItem Content="命令提示符"/>
-            </ComboBox>
-            <TextBlock Text="Windows Terminal 不可用时自动回退到命令提示符。"
-                       Margin="0,2,0,0" TextWrapping="Wrap" Opacity="0.7"/>
+                <Border Style="{StaticResource SettingsSection}">
+                    <StackPanel>
+                        <TextBlock Text="系统集成" Style="{StaticResource SettingsSectionTitle}"/>
+                        <CheckBox x:Name="CaptureExplorerCheckBox"
+                                  Content="接管新打开的文件资源管理器窗口"
+                                  Style="{StaticResource SettingsCheckBox}"
+                                  Margin="0,12,0,0"/>
+                        <TextBlock Text="Win+E / 双击文件夹打开的资源管理器窗口会转为 FileTabs 标签页；按住 Ctrl+Shift 打开可临时绕过。"
+                                   Style="{StaticResource SettingsHint}"/>
+                        <CheckBox x:Name="RedirectFoldersCheckBox"
+                                  Content="双击文件夹 / 驱动器时用 FileTabs 打开"
+                                  Style="{StaticResource SettingsCheckBox}"
+                                  Margin="0,14,0,0"/>
+                        <TextBlock Text="通过当前用户的注册表重定向，无需管理员权限，可随时取消。"
+                                   Style="{StaticResource SettingsHint}"/>
+                        <Grid Margin="0,14,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="96"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="打开终端" Style="{StaticResource SettingsFieldLabel}"/>
+                            <ComboBox x:Name="TerminalCombo" Grid.Column="1"
+                                      Style="{StaticResource SettingsComboBox}"
+                                      SelectedIndex="0">
+                                <ComboBoxItem Content="Windows Terminal" Tag="WindowsTerminal"/>
+                                <ComboBoxItem Content="PowerShell" Tag="PowerShell"/>
+                                <ComboBoxItem Content="命令提示符" Tag="CommandPrompt"/>
+                                <ComboBoxItem Content="Warp" Tag="Warp"/>
+                            </ComboBox>
+                        </Grid>
+                        <TextBlock Text="Warp / Windows Terminal 不可用时自动回退到命令提示符。"
+                                   Style="{StaticResource SettingsHint}"/>
+                    </StackPanel>
+                </Border>
 
-            <TextBlock Text="搜索与拖放" FontWeight="SemiBold" Margin="0,22,0,0"/>
-            <CheckBox x:Name="SearchSortByNameCheckBox"
-                      Content="Everything 搜索结果按文件名排序"
-                      Margin="0,10,0,0"
-                      Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-            <CheckBox x:Name="DropPointEnabledCheckBox"
-                      Content="启用拖放中转（Shift+CapsLock 唤起临时托盘点）"
-                      Margin="0,8,0,0"
-                      Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
-
+                <Border Style="{StaticResource SettingsSection}">
+                    <StackPanel>
+                        <TextBlock Text="搜索与拖放" Style="{StaticResource SettingsSectionTitle}"/>
+                        <CheckBox x:Name="SearchSortByNameCheckBox"
+                                  Content="Everything 搜索结果按文件名排序"
+                                  Style="{StaticResource SettingsCheckBox}"
+                                  Margin="0,12,0,0"/>
+                        <CheckBox x:Name="DropPointEnabledCheckBox"
+                                  Content="启用拖放中转（Shift+CapsLock 唤起临时托盘点）"
+                                  Style="{StaticResource SettingsCheckBox}"
+                                  Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
-        <Border Grid.Row="1" Padding="16,10,16,12"
+        <Border Grid.Row="1" Padding="20,10,20,12"
                 BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
                 BorderThickness="0,1,0,0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="确定" Width="72" Height="28" IsDefault="True" Click="Ok_Click"/>
-                <Button Content="取消" Width="72" Height="28" IsCancel="True" Margin="6,0,0,0"/>
+                <Button Content="确定" Width="76" Height="30" IsDefault="True" Click="Ok_Click"/>
+                <Button Content="取消" Width="76" Height="30" IsCancel="True" Margin="8,0,0,0"/>
             </StackPanel>
         </Border>
     </Grid>

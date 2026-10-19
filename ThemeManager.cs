@@ -52,6 +52,45 @@ public static class ThemeManager
         ApplicationThemeManager.Apply(
             dark ? ApplicationTheme.Dark : ApplicationTheme.Light,
             Wpf.Ui.Controls.WindowBackdropType.None);
+
+        // 浅色主题用 360 的浅蓝灰，但深色主题保留 FileTabs 自己的暗色表面；
+        // 两套主题共用同一组资源键，切换时重绘整个标题区。
+        var chrome = dark
+            ? new ChromePalette("#26313C", "#334252", "#3E4F61", "#26313C", "#34424F",
+                "#222C36", "#303D4A", "#465567", "#1D252E", "#1D252E", "#E8EDF2", "#A9B4BF",
+                "#2D3843", "#3B4856")
+            : new ChromePalette("#DFE8F1", "#D0DCE9", "#C2D0DF", "#DFE8F1", "#FFFFFF",
+                "#EAF0F6", "#D9E4EF", "#C4D2E0", "#FFFFFF", "#F7FAFC", "#1F2329", "#5F6670",
+                "#F7F9FB", "#E3E9EF");
+        // 360 的标题区是一整块浅蓝灰，标签间隙与背景同色。
+        SetBrush("FileTabs.ChromeFillBrush", chrome.Chrome);
+        SetBrush("FileTabs.TitleFillBrush", chrome.Chrome);
+        SetBrush("FileTabs.ChromeHoverBrush", chrome.Hover);
+        SetBrush("FileTabs.ChromePressedBrush", chrome.Pressed);
+        SetBrush("FileTabs.TabInactiveBrush", chrome.TabInactive);
+        SetBrush("FileTabs.TabActiveBrush", chrome.TabActive);
+        SetBrush("FileTabs.BookmarkFillBrush", chrome.Bookmark);
+        SetBrush("FileTabs.BookmarkHoverBrush", chrome.BookmarkHover);
+        SetBrush("FileTabs.DividerBrush", chrome.Divider);
+        SetBrush("FileTabs.FieldFillBrush", chrome.Field);
+        SetBrush("FileTabs.FieldHoverBrush", chrome.FieldHover);
+        SetBrush("FileTabs.ChromeTextBrush", chrome.Text);
+        SetBrush("FileTabs.ChromeMutedTextBrush", chrome.MutedText);
+        SetBrush("FileTabs.SettingsCardBrush", chrome.SettingsCard);
+        SetBrush("FileTabs.SettingsCardBorderBrush", chrome.SettingsCardBorder);
+    }
+
+    private sealed record ChromePalette(
+        string Chrome, string Hover, string Pressed, string TabInactive, string TabActive,
+        string Bookmark, string BookmarkHover, string Divider, string Field, string FieldHover,
+        string Text, string MutedText, string SettingsCard, string SettingsCardBorder);
+
+    private static void SetBrush(string key, string color)
+    {
+        var brush = new SolidColorBrush((System.Windows.Media.Color)
+            System.Windows.Media.ColorConverter.ConvertFromString(color));
+        brush.Freeze();
+        Application.Current.Resources[key] = brush;
     }
 
     public static bool IsSystemDark()

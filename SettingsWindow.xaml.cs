@@ -33,12 +33,16 @@ public partial class SettingsWindow : Window
         DropPointEnabledCheckBox.IsChecked = AppSettings.Current.DropPointEnabled;
         CaptureExplorerCheckBox.IsChecked = AppSettings.Current.CaptureExplorer;
         RedirectFoldersCheckBox.IsChecked = NativeRedirect.IsInstalled();
-        TerminalCombo.SelectedIndex = AppSettings.Current.Terminal switch
+        TerminalCombo.SelectedItem = TerminalCombo.Items
+            .OfType<System.Windows.Controls.ComboBoxItem>()
+            .FirstOrDefault(item => string.Equals(
+                item.Tag as string,
+                AppSettings.Current.Terminal,
+                StringComparison.OrdinalIgnoreCase));
+        if (TerminalCombo.SelectedIndex < 0)
         {
-            nameof(TerminalKind.PowerShell) => 1,
-            nameof(TerminalKind.CommandPrompt) => 2,
-            _ => 0,
-        };
+            TerminalCombo.SelectedIndex = 0;
+        }
     }
 
     private void FitToWorkArea()
@@ -122,12 +126,9 @@ public partial class SettingsWindow : Window
         AppSettings.Current.CaptureExplorer = CaptureExplorerCheckBox.IsChecked == true;
         AppSettings.Current.DropPointEnabled = DropPointEnabledCheckBox.IsChecked == true;
         AppSettings.Current.RestoreLastSession = RestoreLastSessionCheckBox.IsChecked == true;
-        AppSettings.Current.Terminal = TerminalCombo.SelectedIndex switch
-        {
-            1 => nameof(TerminalKind.PowerShell),
-            2 => nameof(TerminalKind.CommandPrompt),
-            _ => nameof(TerminalKind.WindowsTerminal),
-        };
+        AppSettings.Current.Terminal =
+            (TerminalCombo.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Tag as string
+            ?? nameof(TerminalKind.WindowsTerminal);
         var startWithWindows = StartWithWindowsCheckBox.IsChecked == true;
         if (startWithWindows)
         {

@@ -10,6 +10,11 @@ public sealed class Bookmark
 {
     public string Name { get; set; } = "";
     public string Path { get; set; } = "";
+
+    // Older bookmarks have no IsFolder field and do not break deserialization:
+    // the initializer supplies the default. A missing target still renders as
+    // a folder, matching 360's yellow folder glyph.
+    public bool IsFolder { get; set; } = true;
 }
 
 public sealed class SessionData
@@ -102,6 +107,7 @@ public enum TerminalKind
     WindowsTerminal,
     PowerShell,
     CommandPrompt,
+    Warp,
 }
 
 /// <summary>

@@ -61,6 +61,9 @@ public partial class MainWindow : FluentWindow
         BookmarkStrip.ItemsSource = _bookmarks;
         _bookmarks.CollectionChanged += (_, _) =>
             BookmarkEmptyHint.Visibility = _bookmarks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        _tabs.CollectionChanged += (_, _) => UpdateTabCount();
+        _bookmarks.CollectionChanged += (_, _) => UpdatePasteButton();
+        Activated += (_, _) => UpdatePasteButton();
 
         Loaded += (_, _) => Startup();
         ToolbarMenu.Opened += (_, _) => SyncToolbarMenuState();
@@ -80,7 +83,32 @@ public partial class MainWindow : FluentWindow
         _sessionSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _sessionSaveTimer.Tick += (_, _) => SaveCurrentSession();
         _captureService.NewExplorerWindow += OnExplorerWindowCaptured;
+        UpdatePasteButton();
         RestoreWindowPlacement();
+    }
+
+    private void UpdateTabCount() => TabCountText.Text = _tabs.Count.ToString();
+
+    private void TabListButton_Click(object sender, RoutedEventArgs e)
+    {
+        TabListMenu.PlacementTarget = TabListButton;
+        TabListMenu.IsOpen = true;
+    }
+
+    private void TabListMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        TabListMenu.Items.Clear();
+        foreach (var tab in _tabs)
+        {
+            var item = new MenuItem
+            {
+                Header = tab.Title,
+                IsChecked = tab.IsActive,
+                ToolTip = tab.Browser.NavigationLog?.CurrentLocation?.ParsingName,
+            };
+            item.Click += (_, _) => ActivateTab(tab);
+            TabListMenu.Items.Add(item);
+        }
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -127,6 +155,7 @@ public partial class MainWindow : FluentWindow
     {
         var collapsed = ActualWidth <= MinWidth + 20;
         SearchBox.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        SearchPanel.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
         SearchToggleButton.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -306,6 +335,10 @@ public partial class MainWindow : FluentWindow
         foreach (var tab in _tabs)
         {
             tab.ApplyShellTheme();
+            // Pane visibility is only applied by the checkbox handlers, so a
+            // persisted "off" would otherwise leave the pane visible at startup.
+            tab.ApplyDetailsPaneVisibility(AppSettings.Current.ShowDetailsPane);
+            tab.ApplyPreviewPaneVisibility(AppSettings.Current.ShowPreviewPane);
         }
         _searchSort = AppSettings.Current.SearchSortByName
             ? EverythingClient.SortMode.NameAscending
@@ -336,6 +369,9 @@ public partial class MainWindow : FluentWindow
         };
         _tabs.Add(tab);
         ViewContainer.Children.Add(tab.Host);
+        // New tabs must inherit the current pane state instead of the shell default.
+        tab.ApplyDetailsPaneVisibility(AppSettings.Current.ShowDetailsPane);
+        tab.ApplyPreviewPaneVisibility(AppSettings.Current.ShowPreviewPane);
         ActivateTab(tab);
     }
 
@@ -383,6 +419,7 @@ public partial class MainWindow : FluentWindow
             t.Host.Visibility = t.IsActive ? Visibility.Visible : Visibility.Hidden;
         }
         _active = tab;
+        UpdateTabCount();
         SyncNavigationBar();
         UpdateStatusBar();
         MarkSessionDirty();
@@ -429,6 +466,8 @@ public partial class MainWindow : FluentWindow
         UpdateBreadcrumbs(parsing, location?.Name);
         BackButton.IsEnabled = log?.CanNavigateBackward ?? false;
         ForwardButton.IsEnabled = log?.CanNavigateForward ?? false;
+        NewFolderButton.IsEnabled = CanModifyCurrentFolder();
+        UpdatePasteButton();
     }
 
     private void UpdateBreadcrumbs(string parsingPath, string? shellName = null)
@@ -567,6 +606,16 @@ public partial class MainWindow : FluentWindow
         try
         {
             Clipboard.SetText(path);
+            CopyPathButton.ToolTip = $"已复制：{path}";
+            // Same confirmation pattern as the toolbar: restore after a beat so
+            // hovering later does not keep claiming a copy just happened.
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                CopyPathButton.ToolTip = "复制当前路径";
+            };
+            timer.Start();
         }
         catch (Exception ex)
         {
@@ -733,7 +782,7 @@ public partial class MainWindow : FluentWindow
         }
         var name = Path.GetFileName(normalized);
         if (string.IsNullOrEmpty(name)) name = path;
-        _bookmarks.Add(new Bookmark { Name = name, Path = path });
+        _bookmarks.Add(new Bookmark { Name = name, Path = path, IsFolder = Directory.Exists(path) });
         AppStorage.SaveBookmarks(_bookmarks);
     }
 
@@ -889,6 +938,235 @@ public partial class MainWindow : FluentWindow
 
     private void NewTab_Click(object sender, RoutedEventArgs e) => AddTab(AppSettings.Current.NewTabPath);
 
+    // ---------- file commands ----------
+
+    private string? CurrentFolderPath()
+    {
+        var path = _active?.Browser.NavigationLog?.CurrentLocation?.ParsingName;
+        return !string.IsNullOrWhiteSpace(path) && Directory.Exists(path) ? path : null;
+    }
+
+    private bool CanModifyCurrentFolder() => CurrentFolderPath() is not null;
+
+    private void NewFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        var folder = CurrentFolderPath();
+        if (folder is null) return;
+        try
+        {
+            var name = "新建文件夹";
+            var candidate = Path.Combine(folder, name);
+            for (var suffix = 2; Directory.Exists(candidate) || File.Exists(candidate); suffix++)
+            {
+                candidate = Path.Combine(folder, $"{name} ({suffix})");
+            }
+            Directory.CreateDirectory(candidate);
+            _active?.Browser.Navigate(ShellObject.FromParsingName(folder));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, ex.Message, "无法新建文件夹",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void CutButton_Click(object sender, RoutedEventArgs e) => SetFileClipboard(cut: true);
+
+    private void CopyButton_Click(object sender, RoutedEventArgs e) => SetFileClipboard(cut: false);
+
+    private void SetFileClipboard(bool cut)
+    {
+        if (_active is not { } tab) return;
+        var paths = new System.Collections.Specialized.StringCollection();
+        foreach (var item in tab.Browser.SelectedItems)
+        {
+            if (item is not ShellObject shellItem) continue;
+            var path = shellItem.ParsingName;
+            if (!string.IsNullOrWhiteSpace(path) && Path.IsPathRooted(path)) paths.Add(path);
+        }
+        if (paths.Count == 0) return;
+
+        var data = new System.Windows.DataObject();
+        data.SetFileDropList(paths);
+        data.SetData("Preferred DropEffect", new MemoryStream(
+            BitConverter.GetBytes(cut ? 2 : 5)));
+        try
+        {
+            Clipboard.SetDataObject(data, copy: true);
+            UpdatePasteButton();
+        }
+        catch (ExternalException)
+        {
+            // Another process owns the clipboard; no partial file operation happened.
+        }
+    }
+
+    private void UpdatePasteButton()
+    {
+        PasteButton.IsEnabled = CanModifyCurrentFolder() && ClipboardHasFiles();
+    }
+
+    private static bool ClipboardHasFiles()
+    {
+        try
+        {
+            return Clipboard.ContainsFileDropList();
+        }
+        catch (ExternalException)
+        {
+            // Clipboard is momentarily locked by another process.
+            return false;
+        }
+    }
+
+    private void PasteButton_Click(object sender, RoutedEventArgs e)
+    {
+        var folder = CurrentFolderPath();
+        if (folder is null || !ClipboardHasFiles()) return;
+        var sources = ClipboardFilePaths();
+        if (sources.Count == 0) return;
+        RunShellOperation(() => ShellFileOperations.Copy(sources, folder),
+            "粘贴失败");
+        RefreshActive();
+    }
+
+    private static List<string> ClipboardFilePaths()
+    {
+        var result = new List<string>();
+        try
+        {
+            foreach (var entry in Clipboard.GetFileDropList())
+            {
+                if (entry is { Length: > 0 } path) result.Add(path);
+            }
+        }
+        catch (ExternalException)
+        {
+            // Clipboard was taken by another process between the two reads.
+        }
+        return result;
+    }
+
+    private void DeleteButton_Click(object sender, RoutedEventArgs e)
+    {
+        var sources = SelectedShellPaths();
+        if (sources.Count == 0) return;
+        RunShellOperation(() => ShellFileOperations.DeleteToRecycleBin(sources),
+            "删除失败");
+        RefreshActive();
+    }
+
+    private List<string> SelectedShellPaths()
+    {
+        var result = new List<string>();
+        if (_active is not { } tab) return result;
+        try
+        {
+            foreach (var item in tab.Browser.SelectedItems)
+            {
+                if (item is not ShellObject shellItem) continue;
+                if (Path.IsPathRooted(shellItem.ParsingName)) result.Add(shellItem.ParsingName);
+            }
+        }
+        catch (COMException)
+        {
+            // The shell view is between item collections during navigation.
+        }
+        return result;
+    }
+
+    private void RefreshActive()
+    {
+        if (_active?.Browser.NavigationLog.CurrentLocation is { } location)
+        {
+            RefreshTab(_active, location);
+        }
+    }
+
+    private void RunShellOperation(Action operation, string failureTitle)
+    {
+        try
+        {
+            operation();
+        }
+        catch (OperationCanceledException)
+        {
+            // The user dismissed an overwrite prompt; nothing to report.
+        }
+        catch (Exception ex) when (ex is COMException or IOException
+            or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            MessageBox.Show(this, ex.Message, failureTitle,
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void PropertiesButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_active is not { } tab) return;
+        try
+        {
+            if (tab.Browser.SelectedItems.Count == 1
+                && tab.Browser.SelectedItems[0] is ShellObject item)
+            {
+                ShowShellProperties(item.ParsingName);
+            }
+            else if (CurrentFolderPath() is { } folder)
+            {
+                ShowShellProperties(folder);
+            }
+        }
+        catch (Exception ex) when (ex is COMException or InvalidOperationException
+            or System.ComponentModel.Win32Exception)
+        {
+            MessageBox.Show(this, ex.Message, "无法打开属性",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void ShowShellProperties(string path)
+    {
+        // SEE_MASK_INVOKEIDLIST is required for shell verbs that need a PIDL,
+        // and "properties" is one of them; without it ShellExecuteEx returns
+        // success but no dialog appears.
+        const int SEE_MASK_INVOKEIDLIST = 0x0000000C;
+        var info = new ShellExecuteInfo
+        {
+            Size = Marshal.SizeOf<ShellExecuteInfo>(),
+            Mask = SEE_MASK_INVOKEIDLIST,
+            Verb = "properties",
+            File = path,
+            Show = 5,
+        };
+        if (!ShellExecuteEx(ref info))
+        {
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ShellExecuteInfo
+    {
+        public int Size;
+        public int Mask;
+        public IntPtr Hwnd;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? Verb;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? File;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? Parameters;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? Directory;
+        public int Show;
+        public IntPtr HInstApp;
+        public IntPtr IdList;
+        [MarshalAs(UnmanagedType.LPWStr)] public string? Class;
+        public IntPtr HkeyClass;
+        public int HotKey;
+        public IntPtr Icon;
+        public IntPtr Process;
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool ShellExecuteEx(ref ShellExecuteInfo info);
+
     // ---------- native Explorer takeover ----------
 
     private void OnExplorerWindowCaptured(int hwnd, string path)
@@ -947,7 +1225,15 @@ public partial class MainWindow : FluentWindow
         }
         if (AppSettings.Current.ShowPreviewPane != previewPane)
         {
-            ShowPreviewPaneMenuItem.IsChecked = AppSettings.Current.ShowPreviewPane;
+            _isApplyingAppearanceSettings = true;
+            try
+            {
+                ShowPreviewPaneMenuItem.IsChecked = AppSettings.Current.ShowPreviewPane;
+            }
+            finally
+            {
+                _isApplyingAppearanceSettings = false;
+            }
             foreach (var tab in _tabs)
             {
                 tab.ApplyPreviewPaneVisibility(AppSettings.Current.ShowPreviewPane);
@@ -963,6 +1249,16 @@ public partial class MainWindow : FluentWindow
         SyncToolbarMenuState();
         ToolbarMenu.PlacementTarget = ToolbarMenuButton;
         ToolbarMenu.IsOpen = true;
+    }
+
+    private void AiButton_Click(object sender, RoutedEventArgs e)
+    {
+        // 360 在命令区右侧提供 AI 入口；FileTabs 目前没有内置模型服务，
+        // 因此明确提示而不是假装打开一个空面板。
+        MessageBox.Show(this,
+            "AI 入口尚未接入模型服务。\n\n" +
+            "接入后这里会用于理解当前目录、批量重命名和整理文件。",
+            "AI 助手", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void SyncToolbarMenuState()
@@ -1178,17 +1474,55 @@ public partial class MainWindow : FluentWindow
             case TerminalKind.CommandPrompt:
                 StartProcess("cmd.exe", "/K cd /d \"" + directory + "\"", directory);
                 break;
-            default:
-                try
+            case TerminalKind.Warp:
+                if (!TryStartWarp(directory))
                 {
-                    StartProcess("wt.exe", $"-d \"{directory}\"", directory);
-                }
-                catch (Exception)
-                {
-                    // Windows Terminal is optional; fall back to the system console.
-                    StartProcess("cmd.exe", "/K cd /d \"" + directory + "\"", directory);
+                    StartWindowsTerminalOrCommandPrompt(directory);
                 }
                 break;
+            default:
+                StartWindowsTerminalOrCommandPrompt(directory);
+                break;
+        }
+    }
+
+    private static bool TryStartWarp(string directory)
+    {
+        try
+        {
+            var warp = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs", "Warp", "warp.exe");
+            var target = "Warp://action/new_tab?path=" + Uri.EscapeDataString(directory);
+            if (File.Exists(warp))
+            {
+                Process.Start(new ProcessStartInfo(warp, $"\"{target}\"")
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = directory,
+                });
+                return true;
+            }
+            StartProcess("warp.exe", $"\"{target}\"", directory);
+            return true;
+        }
+        catch (Exception)
+        {
+            // Warp is optional; let the caller fall back like Windows Terminal.
+            return false;
+        }
+    }
+
+    private static void StartWindowsTerminalOrCommandPrompt(string directory)
+    {
+        try
+        {
+            StartProcess("wt.exe", $"-d \"{directory}\"", directory);
+        }
+        catch (Exception)
+        {
+            // Windows Terminal is optional; fall back to the system console.
+            StartProcess("cmd.exe", "/K cd /d \"" + directory + "\"", directory);
         }
     }
 
@@ -1687,12 +2021,12 @@ public partial class MainWindow : FluentWindow
                         SearchHintText.Text = "Everything 搜索超时";
                         SearchHintPopup.IsOpen = true;
                         SearchResults.ItemsSource = null;
-                        OpenSearchPanel(false);
+                        OpenSearchPanel();
                         return;
                     }
                     SearchResults.ItemsSource = results;
                     SearchResultCount.Text = $"{results.Count} 个结果";
-                    OpenSearchPanel(results.Count > 0);
+                    OpenSearchPanel();
                     if (SearchResults.Items.Count > 0) SearchResults.SelectedIndex = 0;
                 });
             }
@@ -1706,7 +2040,7 @@ public partial class MainWindow : FluentWindow
                     if (token.IsCancellationRequested) return;
                     SearchHintText.Text = ex.Message; SearchHintPopup.IsOpen = true;
                     SearchResults.ItemsSource = null;
-                    OpenSearchPanel(false);
+                    OpenSearchPanel();
                 });
             }
         }, token);
@@ -1954,18 +2288,23 @@ public partial class MainWindow : FluentWindow
 
     private EverythingClient.SortMode _searchSort = EverythingClient.SortMode.ModifiedDescending;
 
-    private void OpenSearchPanel(bool focusList)
+    private void OpenSearchPanel()
     {
         SearchResultsPanel.Visibility = Visibility.Visible;
         SearchPanelSplitter.Visibility = Visibility.Visible;
-        SearchResultsPanel.Width = 300;
-        SearchResults.Focus();
+        // The panel lives in its own column; giving the panel a Width while the
+        // column stays 0 leaves it clipped to nothing, so size the column.
+        SearchResultsColumn.Width = new GridLength(300);
+        // Deliberately keep focus in the search box: moving it to the list here
+        // would swallow the next keystrokes while the user is still typing.
+        // The Down key already hands focus to the list on demand.
     }
 
     private void CloseSearchPanel()
     {
         SearchResultsPanel.Visibility = Visibility.Collapsed;
         SearchPanelSplitter.Visibility = Visibility.Collapsed;
+        SearchResultsColumn.Width = new GridLength(0);
         SearchResults.ItemsSource = null;
     }
 

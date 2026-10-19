@@ -39,8 +39,11 @@ public static class EverythingClient
     private const uint RequestDateModified = 0x00000040;
     private const uint SortDateModifiedDescending = 14;
     private const uint SortNameAscending = 1;
-    private const uint SortSizeDescending = 7;
-    private const uint SortPathAscending = 8;
+    // Values come from the Everything SDK header. The order is
+    // name, path, size, extension - each ascending then descending -
+    // so size descending is 6 and path ascending is 3.
+    private const uint SortSizeDescending = 6;
+    private const uint SortPathAscending = 3;
 
     public enum SortMode
     {
