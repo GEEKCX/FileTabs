@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Forms.Integration;
 using Microsoft.WindowsAPICodePack.Controls;
@@ -29,6 +30,13 @@ public sealed class BrowserTab : INotifyPropertyChanged
     /// drains would see an empty collection.
     /// </summary>
     public event EventHandler? SelectionStateChanged;
+
+    /// <summary>
+    /// Alt+Left / Alt+Right typed while the native shell view owns the focus.
+    /// The argument is -1 for the previous tab and +1 for the next one; the
+    /// window turns it into an actual tab switch.
+    /// </summary>
+    public event Action<int>? TabSwitchRequested;
 
     // ExplorerBrowser throws when ViewMode is assigned before the shell view
     // exists; remember the request and push it once the handle is created.
@@ -144,6 +152,8 @@ public sealed class BrowserTab : INotifyPropertyChanged
             // Navigation rebuilds the DirectUI view; reapply without it the
             // new shell surface follows the light system theme again.
             ApplyShellTheme();
+            // The rebuilt view means new child HWNDs to cover for wheel/keys.
+            InstallShellSubclassTree();
             ContinuePaneRebuild(e.NewLocation);
             SelectionStateChanged?.Invoke(this, EventArgs.Empty);
         };
@@ -151,7 +161,9 @@ public sealed class BrowserTab : INotifyPropertyChanged
         {
             ApplyShellTheme();
             ApplyViewMode();
+            InstallShellSubclassTree();
         };
+        Browser.HandleDestroyed += (_, _) => ReleaseShellSubclasses();
         Browser.SelectionChanged += (_, _) => SelectionStateChanged?.Invoke(this, EventArgs.Empty);
         Browser.ItemsChanged += (_, _) => SelectionStateChanged?.Invoke(this, EventArgs.Empty);
 
@@ -356,6 +368,160 @@ public sealed class BrowserTab : INotifyPropertyChanged
         }
         Browser.ContentOptions.ViewMode = _requestedViewMode;
     }
+
+    // ---------- native input bridge ----------
+
+    // Ctrl+wheel walks this ladder, the zoom stops of the View menu in order.
+    private static readonly (ExplorerBrowserViewMode Mode, int? ThumbnailSize)[] ViewWheelLadder =
+    {
+        (ExplorerBrowserViewMode.Details, null),
+        (ExplorerBrowserViewMode.List, null),
+        (ExplorerBrowserViewMode.SmallIcon, null),
+        (ExplorerBrowserViewMode.Icon, null),
+        (ExplorerBrowserViewMode.Thumbnail, 96),
+        (ExplorerBrowserViewMode.Thumbnail, 256),
+    };
+
+    private const uint WmMouseWheel = 0x020A;
+    private const uint WmSysKeyDown = 0x0104;
+    private const int VkControl = 0x11;
+    private const int VkLeft = 0x25;
+    private const int VkRight = 0x27;
+
+    // Keyboard and wheel messages go to the deepest shell window, not to the
+    // ExplorerBrowser HWND itself, so every descendant needs the subclass.
+    // The callback is static, hence the HWND -> tab map; it is cleared when
+    // the browser handle is destroyed.
+    private static readonly Dictionary<IntPtr, BrowserTab> ShellSubclassOwners = new();
+    private readonly HashSet<IntPtr> _shellSubclassed = new();
+
+    private void InstallShellSubclassTree()
+    {
+        if (!Browser.IsHandleCreated) return;
+        InstallShellSubclass(Browser.Handle);
+        _ = EnumChildWindows(Browser.Handle, (hwnd, _) =>
+        {
+            InstallShellSubclass(hwnd);
+            return true;
+        }, IntPtr.Zero);
+    }
+
+    private void InstallShellSubclass(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !_shellSubclassed.Add(hwnd)) return;
+        ShellSubclassOwners[hwnd] = this;
+        SetWindowSubclass(hwnd, ShellSubclassProcRef, UIntPtr.Zero, IntPtr.Zero);
+    }
+
+    private void ReleaseShellSubclasses()
+    {
+        foreach (var hwnd in _shellSubclassed)
+        {
+            ShellSubclassOwners.Remove(hwnd);
+        }
+        _shellSubclassed.Clear();
+    }
+
+    private static IntPtr ShellSubclassProc(
+        IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, UIntPtr id, IntPtr refData)
+    {
+        if (!ShellSubclassOwners.TryGetValue(hwnd, out var tab))
+        {
+            return DefSubclassProc(hwnd, msg, wParam, lParam);
+        }
+
+        if (msg == WmMouseWheel && (GetKeyState(VkControl) & 0x8000) != 0)
+        {
+            var delta = unchecked((short)((long)wParam >> 16));
+            tab.StepViewByWheel(delta > 0 ? 1 : -1);
+            // Swallow the message so the shell does not scroll as well.
+            return IntPtr.Zero;
+        }
+
+        // Alt+Left / Alt+Right arrive as system keys; bit 29 of lParam tells
+        // apart the Alt-held variant from plain arrow keys.
+        if (msg == WmSysKeyDown && (lParam.ToInt64() & (1L << 29)) != 0)
+        {
+            var vk = wParam.ToInt64();
+            if (vk is VkLeft or VkRight)
+            {
+                tab.TabSwitchRequested?.Invoke(vk == VkLeft ? -1 : 1);
+                return IntPtr.Zero;
+            }
+        }
+
+        return DefSubclassProc(hwnd, msg, wParam, lParam);
+    }
+
+    private void StepViewByWheel(int direction)
+    {
+        if (!Browser.IsHandleCreated || Browser.IsDisposed) return;
+        try
+        {
+            var index = CurrentWheelLadderIndex();
+            var next = Math.Clamp(index + direction, 0, ViewWheelLadder.Length - 1);
+            if (next == index) return;
+            var (mode, size) = ViewWheelLadder[next];
+            SetViewMode(mode, size);
+        }
+        catch (COMException)
+        {
+            // The shell can be between views mid-navigation; skip this tick.
+        }
+    }
+
+    private int CurrentWheelLadderIndex()
+    {
+        ExplorerBrowserViewMode mode;
+        var thumbnailSize = 0;
+        try
+        {
+            mode = Browser.ContentOptions.ViewMode;
+            thumbnailSize = Browser.ContentOptions.ThumbnailSize;
+        }
+        catch (COMException)
+        {
+            return 1;
+        }
+
+        return mode switch
+        {
+            ExplorerBrowserViewMode.Details => 0,
+            ExplorerBrowserViewMode.List => 1,
+            ExplorerBrowserViewMode.SmallIcon => 2,
+            ExplorerBrowserViewMode.Icon => 3,
+            ExplorerBrowserViewMode.Thumbnail or ExplorerBrowserViewMode.ThumbStrip =>
+                thumbnailSize >= 160 ? 5 : 4,
+            // Tile and Content sit outside the ladder; the nearest stop keeps
+            // the next tick moving in the expected direction.
+            ExplorerBrowserViewMode.Tile => 3,
+            ExplorerBrowserViewMode.Content => 1,
+            _ => 2,
+        };
+    }
+
+    private delegate IntPtr SubclassProcDelegate(
+        IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam, UIntPtr id, IntPtr refData);
+
+    private delegate bool EnumChildProcDelegate(IntPtr hwnd, IntPtr lParam);
+
+    // Keep the delegate alive: SetWindowSubclass stores the raw function
+    // pointer for the lifetime of the HWND.
+    private static readonly SubclassProcDelegate ShellSubclassProcRef = ShellSubclassProc;
+
+    [DllImport("comctl32.dll", SetLastError = true)]
+    private static extern bool SetWindowSubclass(
+        IntPtr hwnd, SubclassProcDelegate pfnSubclass, UIntPtr id, IntPtr refData);
+
+    [DllImport("comctl32.dll")]
+    private static extern IntPtr DefSubclassProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(
+        IntPtr parent, EnumChildProcDelegate callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern short GetKeyState(int virtualKey);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

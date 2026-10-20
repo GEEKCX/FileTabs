@@ -92,11 +92,19 @@
                                       Focusable="False" ToolTip="菜单">
                             <ui:SymbolIcon Symbol="Navigation20" FontSize="14"/>
                         </ToggleButton>
-                        <Grid Grid.Column="1" ClipToBounds="True">
-                            <ItemsControl x:Name="TabStrip">
+                        <Grid Grid.Column="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <!-- 标签条和 + 分列摆放：标签区止于按钮左边缘，
+                                 最后一块标签的 8px 反向外圆弧才不会被按钮底色盖住。
+                                 标签过多时在列内裁切。 -->
+                            <ItemsControl x:Name="TabStrip" Grid.Column="0" ClipToBounds="True">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <StackPanel Orientation="Horizontal"/>
+                                    <!-- 左侧留 8px 给第一块标签的反向外圆弧。 -->
+                                    <StackPanel Orientation="Horizontal" Margin="8,0,0,0"/>
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemContainerStyle>
@@ -111,7 +119,10 @@
                             </ItemsControl.ItemContainerStyle>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid x:Name="TabRoot" Height="30" MinWidth="120" MaxWidth="240"
+                                    <!-- 所有标签统一宽度，随窗口宽度自适应（UpdateTabWidth）。 -->
+                                    <Grid x:Name="TabRoot" Height="30"
+                                          Width="{Binding TabWidth, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                          MinWidth="64" MaxWidth="240"
                                           Margin="0,6,0,0" VerticalAlignment="Bottom"
                                           Background="Transparent"
                                           MouseDown="TabItem_MouseDown"
@@ -133,14 +144,13 @@
                                         <Border x:Name="TabBorder" Padding="0"
                                                 CornerRadius="6,6,0,0"
                                                 Background="{DynamicResource FileTabs.TabInactiveBrush}">
-                                            <DockPanel Margin="7,0,3,0">
-                                                <Button x:Name="CloseButton"
-                                                        Style="{StaticResource TabCloseButton}" DockPanel.Dock="Right"
-                                                        Width="18" Height="18" Margin="2,0,0,0"
-                                                        VerticalAlignment="Center" Visibility="Hidden"
-                                                        Click="TabClose_Click">
-                                                    <ui:SymbolIcon Symbol="Dismiss16" FontSize="9"/>
-                                                </Button>
+                                            <!-- 关闭按钮浮在标题右端而不是占一列：标签统一宽度后，
+                                                 隐藏状态不再白占 20px，标题能多显示几个字。 -->
+                                            <Grid Margin="7,0,3,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                </Grid.ColumnDefinitions>
                                                 <!-- 普通文件夹用黄色文件夹图形；特殊 Shell 位置
                                                      用对应图标，文字色跟随标题区主题。 -->
                                                 <Grid Width="17" Height="16" Margin="0,0,6,0"
@@ -150,11 +160,19 @@
                                                                    FontSize="13" Visibility="Collapsed"
                                                                    Foreground="{DynamicResource FileTabs.ChromeMutedTextBrush}"/>
                                                 </Grid>
-                                                <TextBlock Text="{Binding Title}" VerticalAlignment="Center"
+                                                <TextBlock Grid.Column="1" Text="{Binding Title}" VerticalAlignment="Center"
                                                            Margin="0,0,2,0" FontSize="12.5"
                                                            TextTrimming="CharacterEllipsis"
                                                            Foreground="{DynamicResource FileTabs.ChromeTextBrush}"/>
-                                            </DockPanel>
+                                                <Button x:Name="CloseButton" Grid.Column="1"
+                                                        Style="{StaticResource TabCloseButton}"
+                                                        Width="18" Height="18" Margin="0,0,-3,0"
+                                                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                        Visibility="Hidden"
+                                                        Click="TabClose_Click">
+                                                    <ui:SymbolIcon Symbol="Dismiss16" FontSize="9"/>
+                                                </Button>
+                                            </Grid>
                                         </Border>
                                         <!-- 原有的外圆角标签造型：底部两个反向圆弧把标签和标题区
                                              连成一体，相邻标签共用这条曲线；激活标签不透明，
@@ -207,15 +225,12 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                            <!-- + 固定在标签区右侧；标签过多时只滚动标签本身。 -->
-                            <Grid HorizontalAlignment="Right" Background="{DynamicResource FileTabs.TitleFillBrush}">
-                                <Button x:Name="NewTabButton" Width="28" Height="30" Padding="0"
-                                        Style="{StaticResource Fluent.IconButton}"
-                                Margin="2,6,0,0" VerticalAlignment="Bottom"
-                                Click="NewTab_Click" ToolTip="New tab (Ctrl+T)">
-                                    <ui:SymbolIcon Symbol="Add20" FontSize="13"/>
-                                </Button>
-                            </Grid>
+                            <Button x:Name="NewTabButton" Grid.Column="1" Width="28" Height="30" Padding="0"
+                                    Style="{StaticResource Fluent.IconButton}"
+                                    Margin="2,6,0,0" VerticalAlignment="Bottom"
+                                    Click="NewTab_Click" ToolTip="New tab (Ctrl+T)">
+                                <ui:SymbolIcon Symbol="Add20" FontSize="13"/>
+                            </Button>
                         </Grid>
                     </Grid>
                 </Border>

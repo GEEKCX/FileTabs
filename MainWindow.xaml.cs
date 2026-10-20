@@ -61,13 +61,21 @@ public partial class MainWindow : FluentWindow
         BookmarkStrip.ItemsSource = _bookmarks;
         _bookmarks.CollectionChanged += (_, _) =>
             BookmarkEmptyHint.Visibility = _bookmarks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        _tabs.CollectionChanged += (_, _) => UpdateTabCount();
+        _tabs.CollectionChanged += (_, _) =>
+        {
+            UpdateTabCount();
+            UpdateTabWidth();
+        };
         _bookmarks.CollectionChanged += (_, _) => UpdatePasteButton();
         Activated += (_, _) => UpdatePasteButton();
 
         Loaded += (_, _) => Startup();
         ToolbarMenu.Opened += (_, _) => SyncToolbarMenuState();
         SizeChanged += (_, _) => UpdateSearchLayout();
+        // 用 TitleBar 自己的 SizeChanged：窗口的 SizeChanged 里 ActualWidth
+        // 还是上一次布局的值，拖窗口时会一直落后一步，右边按钮会被挤出去。
+        MainTitleBar.SizeChanged += (_, _) => UpdateTitleBarLayout();
+        TabStrip.SizeChanged += (_, _) => UpdateTabWidth();
         SizeChanged += (_, _) => TrackNormalWindowBounds();
         LocationChanged += (_, _) => TrackNormalWindowBounds();
         StateChanged += (_, _) => TrackNormalWindowBounds();
@@ -159,6 +167,64 @@ public partial class MainWindow : FluentWindow
         SearchToggleButton.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    // Sizes of the pieces WPF-UI puts to the right of the TitleBar Header.
+    // Keep these in sync with MainWindow.xaml.
+    private const double CaptionButtonWidth = 44;   // minimise / maximise / close
+    private const double TabListButtonWidth = 30;
+    private const double TabListButtonMargin = 6;
+    private const double TitleBarTrailingChromeWidth =
+        TabListButtonWidth + TabListButtonMargin + 3 * CaptionButtonWidth;
+
+    private const double TabScoopWidth = 8;
+    private const double TabStripLeftInset = 8;
+    private const double TabMinWidth = 64;
+    private const double TabMaxWidth = 240;
+
+    public static readonly DependencyProperty TabWidthProperty = DependencyProperty.Register(
+        nameof(TabWidth), typeof(double), typeof(MainWindow),
+        new PropertyMetadata(TabMaxWidth));
+
+    /// <summary>统一后的单块标签宽度，绑定在标签模板上。</summary>
+    public double TabWidth
+    {
+        get => (double)GetValue(TabWidthProperty);
+        set => SetValue(TabWidthProperty, value);
+    }
+
+    private void UpdateTitleBarLayout()
+    {
+        double headerLeft;
+        try
+        {
+            headerLeft = TabBar.TransformToAncestor(MainTitleBar).Transform(new System.Windows.Point()).X;
+        }
+        catch (InvalidOperationException)
+        {
+            return; // 还没挂进可视树
+        }
+
+        // Header 在 WPF-UI 模板里不定宽，内容多宽就撑多宽，会把右侧按钮挤出窗口，
+        // 所以这里直接定死宽度。
+        var available = MainTitleBar.ActualWidth - headerLeft - TitleBarTrailingChromeWidth;
+        if (available <= 0) return;
+        TabBar.Width = available;
+    }
+
+    /// <summary>
+    /// 标签统一宽度：按标签区宽度均分，限制在 64~240；左右各留 8px 给
+    /// 首尾标签的反向外圆弧，否则圆弧会贴着裁切边界变成直边。
+    /// </summary>
+    private void UpdateTabWidth()
+    {
+        var stripWidth = TabStrip.ActualWidth;
+        if (stripWidth <= 0) return;
+        var count = Math.Max(1, _tabs.Count);
+        TabWidth = Math.Clamp(
+            (stripWidth - TabStripLeftInset - TabScoopWidth) / count,
+            TabMinWidth,
+            TabMaxWidth);
+    }
+
     private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         const int WM_KEYDOWN = 0x0100;
@@ -218,6 +284,8 @@ public partial class MainWindow : FluentWindow
             AddTab(AppSettings.Current.NewTabPath);
         }
         ApplyCaptureExplorerSetting();
+        UpdateTitleBarLayout();
+        UpdateTabWidth();
     }
 
     private void RestoreWindowPlacement()
@@ -367,6 +435,9 @@ public partial class MainWindow : FluentWindow
             UpdateStatusBar();
             SyncViewMenuChecks();
         };
+        // Alt+Left / Alt+Right typed inside the native shell view; the WPF
+        // key path cannot see those because the HwndHost owns the focus.
+        tab.TabSwitchRequested += CycleTabBy;
         _tabs.Add(tab);
         ViewContainer.Children.Add(tab.Host);
         // New tabs must inherit the current pane state instead of the shell default.
@@ -423,6 +494,19 @@ public partial class MainWindow : FluentWindow
         SyncNavigationBar();
         UpdateStatusBar();
         MarkSessionDirty();
+    }
+
+    /// <summary>
+    /// Alt+Left / Alt+Right step through the open tabs and wrap around.
+    /// </summary>
+    private void CycleTabBy(int direction)
+    {
+        if (_tabs.Count < 2 || _active is null) return;
+        var index = _tabs.IndexOf(_active);
+        if (index < 0) return;
+        var next = (index + direction + _tabs.Count) % _tabs.Count;
+        if (next == index) return;
+        ActivateTab(_tabs[next]);
     }
 
     private void CloseTab(BrowserTab tab)
@@ -1904,6 +1988,20 @@ public partial class MainWindow : FluentWindow
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Alt+Left / Alt+Right hop between tabs. With focus on a WPF control
+        // the key lands here; inside the shell view the BrowserTab subclass
+        // hook reports it through TabSwitchRequested instead.
+        if (Keyboard.Modifiers == ModifierKeys.Alt)
+        {
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            if (key is Key.Left or Key.Right)
+            {
+                CycleTabBy(key == Key.Left ? -1 : 1);
+                e.Handled = true;
+                return;
+            }
+        }
+
         var shift = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
         if (e.Key == Key.T && Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && shift)
         {
