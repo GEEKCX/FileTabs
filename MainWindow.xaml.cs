@@ -340,6 +340,12 @@ public partial class MainWindow : FluentWindow
             top = virtualBounds.Top + ((virtualBounds.Height - height) / 2);
         }
 
+        // Intersecting is not enough: a saved offset with a full-width window
+        // pushes the caption buttons past the screen edge, so clamp the whole
+        // frame into the virtual screen.
+        left = Math.Clamp(left, virtualBounds.Left, virtualBounds.Right - width);
+        top = Math.Clamp(top, virtualBounds.Top, virtualBounds.Bottom - height);
+
         Left = left;
         Top = top;
         Width = width;
