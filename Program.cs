@@ -13,6 +13,12 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // WPF's default adorner selection paints over the glyphs, so
+        // SelectionTextBrush is ignored and an opaque highlight hides the text.
+        AppContext.SetSwitch(
+            "Switch.System.Windows.Controls.Text.UseAdornerForTextboxSelectionRendering",
+            false);
+
         if (args.Length > 0)
         {
             switch (args[0])

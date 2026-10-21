@@ -102,6 +102,8 @@
             <Setter Property="Foreground" Value="{DynamicResource FileTabs.ChromeTextBrush}"/>
             <Setter Property="CaretBrush" Value="{DynamicResource FileTabs.ChromeTextBrush}"/>
             <Setter Property="SelectionBrush" Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+            <Setter Property="SelectionTextBrush" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
+            <Setter Property="SelectionOpacity" Value="1"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="Padding" Value="8,0"/>
             <Setter Property="Template">
@@ -112,6 +114,20 @@
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <!-- 面包屑路径段：悬停底色提示可点击，250ms 延迟导航期间不会显得卡住。 -->
+        <Style x:Key="FileTabs.BreadcrumbSegment" TargetType="Border">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Padding" Value="3,1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="SnapsToDevicePixels" Value="True"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <!-- 书签栏横向滚动：隐藏两侧原生箭头，换成 360 式的细滚动条。 -->
@@ -285,6 +301,8 @@
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="Padding" Value="8,0"/>
             <Setter Property="SelectionBrush" Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+            <Setter Property="SelectionTextBrush" Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
+            <Setter Property="SelectionOpacity" Value="1"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">

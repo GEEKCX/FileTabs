@@ -430,6 +430,9 @@
                                 ClearButtonEnabled="True"
                                 VerticalContentAlignment="Center"
                                 ToolTip="Everything search"
+                                SelectionBrush="{DynamicResource AccentFillColorDefaultBrush}"
+                                SelectionTextBrush="{DynamicResource TextOnAccentFillColorPrimaryBrush}"
+                                SelectionOpacity="1"
                                 TextChanged="SearchBox_TextChanged" KeyDown="SearchBox_KeyDown"/>
                     <!-- 窄窗口时藏起搜索框，只留这个搜索图标。 -->
                 </StackPanel>
@@ -537,7 +540,8 @@
                              TextChanged="AddressBox_TextChanged"
                              LostKeyboardFocus="AddressBox_LostKeyboardFocus"
                              PreviewKeyDown="AddressBox_PreviewKeyDown"
-                             KeyDown="AddressBox_KeyDown"/>
+                             KeyDown="AddressBox_KeyDown"
+                             MouseDoubleClick="AddressBox_MouseDoubleClick"/>
                     <!-- 右侧留出 56px 给 AddressTail，避免长路径压到按钮下面。 -->
                     <Border x:Name="BreadcrumbBar" Background="Transparent" Padding="8,0,56,0"
                             MouseLeftButtonDown="BreadcrumbBar_MouseLeftButtonDown">
@@ -557,11 +561,14 @@
                                 <DataTemplate>
                                     <StackPanel Orientation="Horizontal">
                                         <TextBlock Text="›" Foreground="{DynamicResource FileTabs.ChromeMutedTextBrush}"
-                                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                        <TextBlock Text="{Binding Label}"
-                                                   Foreground="{DynamicResource FileTabs.ChromeTextBrush}"
-                                                   VerticalAlignment="Center" Cursor="Hand"
-                                                   MouseLeftButtonDown="BreadcrumbPart_Click"/>
+                                                   VerticalAlignment="Center" Margin="0,0,2,0"/>
+                                        <Border Style="{StaticResource FileTabs.BreadcrumbSegment}"
+                                                MouseLeftButtonDown="BreadcrumbPart_Click">
+                                            <TextBlock Text="{Binding Label}"
+                                                       Foreground="{DynamicResource FileTabs.ChromeTextBrush}"
+                                                       VerticalAlignment="Center"
+                                                       Cursor="Hand"/>
+                                        </Border>
                                     </StackPanel>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -700,6 +707,9 @@
                                         Width="240" Height="28" Margin="8,0,0,0"
                                         VerticalContentAlignment="Center"
                                         PlaceholderText="搜索历史记录"
+                                        SelectionBrush="{DynamicResource AccentFillColorDefaultBrush}"
+                                        SelectionTextBrush="{DynamicResource TextOnAccentFillColorPrimaryBrush}"
+                                        SelectionOpacity="1"
                                         TextChanged="HistorySearchBox_TextChanged"
                                         KeyDown="HistorySearchBox_KeyDown"/>
                             <TextBlock Text="历史记录" FontSize="16" FontWeight="SemiBold"

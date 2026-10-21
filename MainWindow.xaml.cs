@@ -53,6 +53,14 @@ public partial class MainWindow : FluentWindow
     private bool _addressSuggestionChosen;
     private bool _isAddressEditing;
     private bool _isApplyingAppearanceSettings;
+    private readonly DispatcherTimer _breadcrumbNavTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private BreadcrumbSegment? _pendingBreadcrumbSegment;
+    private BrowserTab? _pendingBreadcrumbTab;
+    private BreadcrumbSegment? _lastBreadcrumbClickSegment;
+    private DateTime _lastBreadcrumbClickAt;
+    private DateTime _addressEditEnteredAt;
+    private bool _addressOpenedByBreadcrumbClick;
+    private string _addressDisplayText = string.Empty;
 
     public MainWindow()
     {
@@ -84,9 +92,12 @@ public partial class MainWindow : FluentWindow
         Closed += (_, _) => _captureService.Dispose();
         Closed += (_, _) => _isClosing = true;
         PreviewKeyDown += OnPreviewKeyDown;
+        PreviewMouseDown += MainWindow_PreviewMouseDown;
+        Deactivated += (_, _) => CancelBreadcrumbInteraction();
         SourceInitialized += (_, _) => ((HwndSource?)PresentationSource.FromVisual(this))?.AddHook(WndProcHook);
 
         ProbeEverythingAvailability();
+        _breadcrumbNavTimer.Tick += (_, _) => NavigatePendingBreadcrumb();
         // Coalesce rapid save triggers (navigation, tab switch, drag, close).
         _sessionSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _sessionSaveTimer.Tick += (_, _) => SaveCurrentSession();
@@ -481,6 +492,7 @@ public partial class MainWindow : FluentWindow
 
     private void ActivateTab(BrowserTab tab)
     {
+        CancelBreadcrumbInteraction();
         BodyRow.Height = new GridLength(1, GridUnitType.Star);
         HistoryRow.Height = new GridLength(0);
         HistoryPanel.Visibility = Visibility.Collapsed;
@@ -538,6 +550,7 @@ public partial class MainWindow : FluentWindow
     {
         // A background navigation can finish while the address editor is open;
         // do not let that programmatic Text assignment re-open suggestions.
+        CancelBreadcrumbInteraction();
         _isAddressEditing = false;
         var log = _active?.Browser.NavigationLog;
         var location = log?.CurrentLocation;
@@ -546,6 +559,7 @@ public partial class MainWindow : FluentWindow
         // parsing name is a GUID. Show the friendly name instead, and keep the
         // GUID in Tag so Copy/Edit can still navigate to the real location.
         AddressBox.Text = ShellDisplayName(parsing, location?.Name);
+        _addressDisplayText = AddressBox.Text;
         AddressBox.Tag = parsing;
         UpdateBreadcrumbs(parsing, location?.Name);
         BackButton.IsEnabled = log?.CanNavigateBackward ?? false;
@@ -556,11 +570,16 @@ public partial class MainWindow : FluentWindow
 
     private void UpdateBreadcrumbs(string parsingPath, string? shellName = null)
     {
-        BreadcrumbItems.ItemsSource = BuildBreadcrumbs(parsingPath, shellName);
+        var displayText = ShellDisplayName(parsingPath, shellName);
+        BreadcrumbItems.ItemsSource = BuildBreadcrumbs(parsingPath, displayText, shellName);
         ShowBreadcrumb(shouldEdit: false);
     }
 
-    private sealed record BreadcrumbSegment(string Path, string Label);
+    private sealed record BreadcrumbSegment(
+        string Path,
+        string Label,
+        int TextStart,
+        int TextLength);
 
     // Friendly label for a shell location. Drive paths pass through unchanged;
     // virtual folders fall back to the known Chinese names, then to the shell
@@ -585,7 +604,10 @@ public partial class MainWindow : FluentWindow
             ["::{645FF040-5081-101B-9F08-00AA002F954E}"] = "回收站",
         };
 
-    private static List<BreadcrumbSegment> BuildBreadcrumbs(string parsingPath, string? shellName = null)
+    private static List<BreadcrumbSegment> BuildBreadcrumbs(
+        string parsingPath,
+        string displayText,
+        string? shellName = null)
     {
         var result = new List<BreadcrumbSegment>();
         if (string.IsNullOrEmpty(parsingPath))
@@ -624,60 +646,178 @@ public partial class MainWindow : FluentWindow
                     // Keep the generic fallback name.
                 }
             }
-            result.Add(new BreadcrumbSegment(parsingPath, label));
+            result.Add(new BreadcrumbSegment(parsingPath, label, 0, displayText.Length));
             return result;
         }
 
         var segments = parsingPath.Split(
             Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
         var accumulated = string.Empty;
+        var searchStart = 0;
         foreach (var segment in segments)
         {
             accumulated = accumulated.Length == 0
                 ? segment
                 : accumulated + Path.DirectorySeparatorChar + segment;
             var label = segment;
+            int textStart;
+            int textLength;
             if (accumulated.Length == 2)
             {
                 // Root like "C:" -> show as "C:\"
                 label = segment + Path.DirectorySeparatorChar;
+                textStart = 0;
+                // "C:" (no trailing separator) is shorter than the "C:\" label.
+                textLength = Math.Min(label.Length, displayText.Length);
+                searchStart = textStart + textLength;
             }
-            result.Add(new BreadcrumbSegment(accumulated, label));
+            else
+            {
+                textStart = Math.Min(searchStart, displayText.Length);
+                textLength = Math.Min(segment.Length, displayText.Length - textStart);
+                searchStart = textStart + textLength + 1;
+            }
+            result.Add(new BreadcrumbSegment(accumulated, label, textStart, textLength));
         }
         return result;
     }
 
     private void ShowBreadcrumb(bool shouldEdit)
     {
-        _isAddressEditing = shouldEdit;
-        BreadcrumbBar.Visibility = shouldEdit ? Visibility.Collapsed : Visibility.Visible;
-        AddressBox.Visibility = shouldEdit ? Visibility.Visible : Visibility.Collapsed;
         if (shouldEdit)
         {
-            AddressBox.Focus();
-            AddressBox.SelectAll();
-            QueueAddressSuggestions(immediate: true);
+            EnterAddressEdit();
         }
         else
         {
-            CloseAddressSuggestions();
+            ExitAddressEdit();
         }
+    }
+
+    private void EnterAddressEdit(
+        BreadcrumbSegment? segment = null,
+        bool showSuggestions = true,
+        bool preserveAllOnDoubleClick = false)
+    {
+        CancelBreadcrumbInteraction();
+        // Escaping an edit leaves its text behind in the hidden TextBox; a new
+        // edit must start from the location actually displayed in the bar.
+        if (!_isAddressEditing && _addressDisplayText.Length > 0)
+        {
+            AddressBox.Text = _addressDisplayText;
+        }
+        _isAddressEditing = true;
+        _addressEditEnteredAt = DateTime.UtcNow;
+        _addressOpenedByBreadcrumbClick = preserveAllOnDoubleClick;
+        BreadcrumbBar.Visibility = Visibility.Collapsed;
+        AddressBox.Visibility = Visibility.Visible;
+
+        // Focus and selection must wait for layout; doing it while the TextBox
+        // is still becoming visible lets the click that opened it reset the
+        // selection.
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+        {
+            if (!_isAddressEditing || !IsLoaded) return;
+            AddressBox.Focus();
+            if (segment is { TextLength: > 0 })
+            {
+                var start = Math.Clamp(segment.TextStart, 0, AddressBox.Text.Length);
+                var length = Math.Clamp(segment.TextLength, 0, AddressBox.Text.Length - start);
+                AddressBox.Select(start, length);
+            }
+            else
+            {
+                AddressBox.SelectAll();
+            }
+            if (showSuggestions) QueueAddressSuggestions(immediate: true);
+        }));
+    }
+
+    private void ExitAddressEdit()
+    {
+        CancelBreadcrumbInteraction();
+        _isAddressEditing = false;
+        _addressOpenedByBreadcrumbClick = false;
+        BreadcrumbBar.Visibility = Visibility.Visible;
+        AddressBox.Visibility = Visibility.Collapsed;
+        CloseAddressSuggestions();
     }
 
     private void BreadcrumbBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         // Single-click anywhere in the breadcrumb's empty area switches to the
         // editable text box; segment clicks stop propagation themselves.
-        ShowBreadcrumb(shouldEdit: true);
+        EnterAddressEdit(showSuggestions: true, preserveAllOnDoubleClick: true);
         e.Handled = true;
     }
 
     private void BreadcrumbPart_Click(object sender, MouseButtonEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: BreadcrumbSegment seg })
+        if (sender is not FrameworkElement { DataContext: BreadcrumbSegment segment }) return;
+
+        var now = DateTime.UtcNow;
+        var isDoubleClick = ReferenceEquals(segment, _lastBreadcrumbClickSegment)
+                            && (now - _lastBreadcrumbClickAt).TotalMilliseconds <= 250;
+        CancelBreadcrumbInteraction();
+
+        if (isDoubleClick)
         {
-            NavigateActive(seg.Path);
+            // The second click cancels the pending navigation and opens the
+            // editor with only this path segment selected.
+            EnterAddressEdit(segment, showSuggestions: false);
         }
+        else
+        {
+            _lastBreadcrumbClickSegment = segment;
+            _lastBreadcrumbClickAt = now;
+            _pendingBreadcrumbSegment = segment;
+            _pendingBreadcrumbTab = _active;
+            _breadcrumbNavTimer.Start();
+        }
+        e.Handled = true;
+    }
+
+    private void NavigatePendingBreadcrumb()
+    {
+        _breadcrumbNavTimer.Stop();
+        var segment = _pendingBreadcrumbSegment;
+        var tab = _pendingBreadcrumbTab;
+        _pendingBreadcrumbSegment = null;
+        _pendingBreadcrumbTab = null;
+        _lastBreadcrumbClickSegment = null;
+        _lastBreadcrumbClickAt = default;
+
+        if (segment is null || tab is null || !ReferenceEquals(tab, _active)) return;
+        NavigateActive(segment.Path);
+    }
+
+    private void CancelBreadcrumbInteraction()
+    {
+        _breadcrumbNavTimer.Stop();
+        _pendingBreadcrumbSegment = null;
+        _pendingBreadcrumbTab = null;
+        _lastBreadcrumbClickSegment = null;
+        _lastBreadcrumbClickAt = default;
+    }
+
+    private void MainWindow_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        // A click anywhere outside the address bar cancels a pending segment
+        // navigation before its 250ms window expires.
+        if (_pendingBreadcrumbSegment is not null && !BreadcrumbBar.IsMouseOver)
+        {
+            CancelBreadcrumbInteraction();
+        }
+    }
+
+    private void AddressBox_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // Double-clicking the breadcrumb's empty area opens the editor with
+        // everything selected; the second click lands in the TextBox and would
+        // otherwise replace that selection with a single word.
+        if (!_isAddressEditing || !_addressOpenedByBreadcrumbClick) return;
+        if ((DateTime.UtcNow - _addressEditEnteredAt).TotalMilliseconds > 300) return;
+        AddressBox.SelectAll();
         e.Handled = true;
     }
 
@@ -1979,6 +2119,7 @@ public partial class MainWindow : FluentWindow
         System.Windows.Controls.TextChangedEventArgs e)
     {
         if (!_isAddressEditing) return;
+        _addressOpenedByBreadcrumbClick = false;
         // Editing invalidates a keyboard-selected item immediately; the
         // replacement list may not have arrived yet.
         _addressSuggestionChosen = false;
