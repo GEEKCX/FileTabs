@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Shell;
 using System.Windows.Threading;
 using System.Diagnostics;
@@ -40,9 +41,10 @@ public partial class MainWindow : FluentWindow
     private BrowserTab? _dragTab;
     private System.Windows.Point _dragStart;
     private bool _isDraggingTab;
+    private System.Windows.Point _titleBarDragStart;
+    private bool _isTitleBarDragArmed;
     private Bookmark? _dragBookmark;
     private bool _isDraggingBookmark;
-    private bool _isSavingSession;
     private bool _isClosing;
     private List<string> _recentlyClosed = new();
     private bool _everythingAvailable = true;
@@ -54,6 +56,9 @@ public partial class MainWindow : FluentWindow
     private bool _isAddressEditing;
     private bool _isApplyingAppearanceSettings;
     private readonly DispatcherTimer _breadcrumbNavTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    private readonly DispatcherTimer _tabLoadingWatchdog = new() { Interval = TimeSpan.FromSeconds(3) };
+    private BrowserTab? _loadingTab;
+    private bool _loadingFallbackApplied;
     private BreadcrumbSegment? _pendingBreadcrumbSegment;
     private BrowserTab? _pendingBreadcrumbTab;
     private BreadcrumbSegment? _lastBreadcrumbClickSegment;
@@ -64,7 +69,9 @@ public partial class MainWindow : FluentWindow
 
     public MainWindow()
     {
+        StartupTiming.Mark("mainwindow-ctor-begin");
         InitializeComponent();
+        StartupTiming.Mark("mainwindow-xaml-loaded");
         TabStrip.ItemsSource = _tabs;
         BookmarkStrip.ItemsSource = _bookmarks;
         _bookmarks.CollectionChanged += (_, _) =>
@@ -83,7 +90,7 @@ public partial class MainWindow : FluentWindow
         // 用 TitleBar 自己的 SizeChanged：窗口的 SizeChanged 里 ActualWidth
         // 还是上一次布局的值，拖窗口时会一直落后一步，右边按钮会被挤出去。
         MainTitleBar.SizeChanged += (_, _) => UpdateTitleBarLayout();
-        TabStrip.SizeChanged += (_, _) => UpdateTabWidth();
+        TabBar.SizeChanged += (_, _) => UpdateTabWidth();
         SizeChanged += (_, _) => TrackNormalWindowBounds();
         LocationChanged += (_, _) => TrackNormalWindowBounds();
         StateChanged += (_, _) => TrackNormalWindowBounds();
@@ -98,12 +105,21 @@ public partial class MainWindow : FluentWindow
 
         ProbeEverythingAvailability();
         _breadcrumbNavTimer.Tick += (_, _) => NavigatePendingBreadcrumb();
+        _tabLoadingWatchdog.Tick += (_, _) => HandleTabLoadingTimeout();
         // Coalesce rapid save triggers (navigation, tab switch, drag, close).
         _sessionSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _sessionSaveTimer.Tick += (_, _) => SaveCurrentSession();
         _captureService.NewExplorerWindow += OnExplorerWindowCaptured;
         UpdatePasteButton();
         RestoreWindowPlacement();
+        StartupTiming.Mark("mainwindow-ctor-end");
+    }
+
+    protected override void OnContentRendered(EventArgs e)
+    {
+        base.OnContentRendered(e);
+        StartupTiming.Mark("first-render");
+        StartupTiming.Flush();
     }
 
     private void UpdateTabCount() => TabCountText.Text = _tabs.Count.ToString();
@@ -123,7 +139,7 @@ public partial class MainWindow : FluentWindow
             {
                 Header = tab.Title,
                 IsChecked = tab.IsActive,
-                ToolTip = tab.Browser.NavigationLog?.CurrentLocation?.ParsingName,
+                ToolTip = tab.CurrentPath,
             };
             item.Click += (_, _) => ActivateTab(tab);
             TabListMenu.Items.Add(item);
@@ -188,6 +204,8 @@ public partial class MainWindow : FluentWindow
 
     private const double TabScoopWidth = 8;
     private const double TabStripLeftInset = 8;
+    private const double MenuButtonSlotWidth = 34;   // menu button 30 + right margin 4
+    private const double NewTabButtonSlotWidth = 30; // new-tab button 28 + left margin 2
     private const double TabMinWidth = 64;
     private const double TabMaxWidth = 240;
 
@@ -222,18 +240,24 @@ public partial class MainWindow : FluentWindow
     }
 
     /// <summary>
-    /// 标签统一宽度：按标签区宽度均分，限制在 64~240；左右各留 8px 给
-    /// 首尾标签的反向外圆弧，否则圆弧会贴着裁切边界变成直边。
+    /// 标签统一宽度：按标签区宽度均分，限制在 64~240。标签条宽度取实际内容
+    /// 宽度，让 + 紧跟最后一块标签；内容放不下时收窄标签条，把 + 留在右端。
     /// </summary>
     private void UpdateTabWidth()
     {
-        var stripWidth = TabStrip.ActualWidth;
-        if (stripWidth <= 0) return;
+        var tabBarWidth = TabBar.ActualWidth;
+        if (tabBarWidth <= 0) return;
+        var stripSpace = tabBarWidth - MenuButtonSlotWidth - NewTabButtonSlotWidth;
+        if (stripSpace <= 0) return;
+
         var count = Math.Max(1, _tabs.Count);
         TabWidth = Math.Clamp(
-            (stripWidth - TabStripLeftInset - TabScoopWidth) / count,
+            (stripSpace - TabStripLeftInset - TabScoopWidth) / count,
             TabMinWidth,
             TabMaxWidth);
+
+        var contentWidth = TabStripLeftInset + (_tabs.Count * TabWidth) + TabScoopWidth;
+        TabStrip.Width = Math.Min(contentWidth, stripSpace);
     }
 
     private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -277,12 +301,14 @@ public partial class MainWindow : FluentWindow
 
     private static bool RefreshTab(BrowserTab tab, ShellObject location)
     {
-        tab.Browser.Navigate(location);
+        if (tab.Browser is not { } browser) return false;
+        browser.Navigate(location);
         return true;
     }
 
     private void Startup()
     {
+        StartupTiming.Mark("startup-begin");
         ApplyAppearanceSettings();
         LoadBookmarks();
         LoadRecentLocations();
@@ -294,9 +320,11 @@ public partial class MainWindow : FluentWindow
         {
             AddTab(AppSettings.Current.NewTabPath);
         }
+        StartupTiming.Mark("session-restored");
         ApplyCaptureExplorerSetting();
         UpdateTitleBarLayout();
         UpdateTabWidth();
+        StartupTiming.Mark("startup-end");
     }
 
     private void RestoreWindowPlacement()
@@ -416,7 +444,9 @@ public partial class MainWindow : FluentWindow
         {
             parsedTheme = AppTheme.FollowSystem;
         }
+        StartupTiming.Mark("theme-apply-begin");
         ThemeManager.Apply(parsedTheme);
+        StartupTiming.Mark("theme-apply-end");
         foreach (var tab in _tabs)
         {
             tab.ApplyShellTheme();
@@ -432,19 +462,27 @@ public partial class MainWindow : FluentWindow
 
     // ---------- tabs ----------
 
-    private void AddTab(string path)
+    private BrowserTab CreateTab(string path, string? title = null)
     {
-        var tab = new BrowserTab(path);
-        tab.Browser.NavigationComplete += (_, _) =>
+        var tab = new BrowserTab(path, title);
+        tab.NavigationCompleted += (_, _) =>
         {
-            if (ReferenceEquals(_active, tab)) SyncNavigationBar();
+            if (ReferenceEquals(_active, tab))
+            {
+                // The host stayed hidden behind the loading overlay; reveal it
+                // only once the shell has content to paint.
+                if (tab.Host is { } host) host.Visibility = Visibility.Visible;
+                SyncNavigationBar();
+                HideTabLoadingOverlay(tab);
+                RecordRecentLocation(tab.CurrentLocation);
+            }
+            StartupTiming.Mark($"navigation-complete {tab.CurrentPath}");
+            StartupTiming.Flush();
             MarkSessionDirty();
         };
-        tab.Browser.NavigationComplete += (_, e) =>
+        tab.NavigationStateChanged += (_, _) =>
         {
-            // Restored background tabs navigate on startup too; only the tab
-            // the user is actually looking at belongs in access history.
-            if (ReferenceEquals(_active, tab)) RecordRecentLocation(e.NewLocation);
+            if (ReferenceEquals(_active, tab)) SyncNavigationBar();
         };
         tab.SelectionStateChanged += (_, _) =>
         {
@@ -456,11 +494,115 @@ public partial class MainWindow : FluentWindow
         // key path cannot see those because the HwndHost owns the focus.
         tab.TabSwitchRequested += CycleTabBy;
         _tabs.Add(tab);
-        ViewContainer.Children.Add(tab.Host);
-        // New tabs must inherit the current pane state instead of the shell default.
-        tab.ApplyDetailsPaneVisibility(AppSettings.Current.ShowDetailsPane);
-        tab.ApplyPreviewPaneVisibility(AppSettings.Current.ShowPreviewPane);
+        return tab;
+    }
+
+    private void AddTab(string path)
+    {
+        var tab = CreateTab(path);
         ActivateTab(tab);
+    }
+
+    private void EnsureTabMaterialized(BrowserTab tab)
+    {
+        if (tab.IsMaterialized || _isClosing) return;
+        if (!ReferenceEquals(_active, tab)) return;
+
+        try
+        {
+            tab.Materialize();
+            StartupTiming.Mark($"tab-materialize {tab.Title}");
+            if (tab.Host is { } host)
+            {
+                ViewContainer.Children.Add(host);
+                host.Visibility = Visibility.Hidden;
+            }
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Background,
+                new Action(tab.StartInitialNavigation));
+        }
+        catch (Exception ex)
+        {
+            AppStorage.Log($"Tab materialization failed for {tab.CurrentPath}: {ex}");
+            if (ReferenceEquals(_active, tab))
+            {
+                _tabLoadingWatchdog.Stop();
+                _loadingTab = tab;
+                TabLoadingTitle.Text = "无法打开此标签";
+                TabLoadingHint.Text = ex.Message;
+            }
+        }
+    }
+
+    private void ShowTabLoadingOverlay(BrowserTab tab)
+    {
+        if (!ReferenceEquals(_loadingTab, tab))
+        {
+            _loadingTab = tab;
+            _loadingFallbackApplied = false;
+            TabLoadingTitle.Text = tab.Title;
+            TabLoadingHint.Text = "正在加载文件视图…";
+        }
+        TabLoadingOverlay.Visibility = Visibility.Visible;
+        StartupTiming.Mark($"overlay-show {tab.Title}");
+        _tabLoadingWatchdog.Stop();
+        _tabLoadingWatchdog.Start();
+    }
+
+    private void HideTabLoadingOverlay(BrowserTab? tab = null)
+    {
+        if (tab is not null && !ReferenceEquals(_loadingTab, tab)) return;
+        _tabLoadingWatchdog.Stop();
+        StartupTiming.Mark($"overlay-hide {_loadingTab?.Title} fallback={_loadingFallbackApplied}");
+        _loadingTab = null;
+        _loadingFallbackApplied = false;
+        TabLoadingOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    private void HandleTabLoadingTimeout()
+    {
+        _tabLoadingWatchdog.Stop();
+        var tab = _loadingTab;
+        if (tab is null || !ReferenceEquals(_active, tab))
+        {
+            HideTabLoadingOverlay();
+            return;
+        }
+        if (tab.HasCompletedNavigation)
+        {
+            HideTabLoadingOverlay();
+            return;
+        }
+        if (_loadingFallbackApplied)
+        {
+            // Even This PC did not finish; keep the overlay so the empty HWND
+            // area is never mistaken for an empty folder.
+            TabLoadingTitle.Text = "无法打开此位置";
+            TabLoadingHint.Text = "保存的路径暂时不可用，可尝试切换标签或在地址栏输入其他位置。";
+            return;
+        }
+
+        _loadingFallbackApplied = true;
+        StartupTiming.Mark($"overlay-fallback {tab.Title}");
+        TabLoadingHint.Text = "保存的路径暂时不可用，正在打开此电脑…";
+        try
+        {
+            EnsureTabMaterialized(tab);
+            tab.MarkUnavailable();
+            tab.NavigateTo(BrowserTab.ThisPc);
+            // If materialization had not reached the first navigation yet,
+            // NavigateTo only updated the target; make sure it starts now.
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Background,
+                new Action(tab.StartInitialNavigation));
+        }
+        catch (Exception ex)
+        {
+            AppStorage.Log($"Fallback navigation failed for {tab.CurrentPath}: {ex}");
+            HideTabLoadingOverlay();
+            return;
+        }
+        _tabLoadingWatchdog.Start();
     }
 
     /// <summary>
@@ -480,9 +622,9 @@ public partial class MainWindow : FluentWindow
         Activate();
         var normalized = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var existing = _tabs.FirstOrDefault(t =>
-{
-            var parsing = t.Browser.NavigationLog?.CurrentLocation?.ParsingName;
-            return parsing is not null && string.Equals(
+        {
+            var parsing = t.CurrentPath;
+            return !string.IsNullOrEmpty(parsing) && string.Equals(
                 parsing.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                 normalized, StringComparison.OrdinalIgnoreCase);
         });
@@ -505,13 +647,40 @@ public partial class MainWindow : FluentWindow
         foreach (var t in _tabs)
         {
             t.IsActive = ReferenceEquals(t, tab);
-            t.Host.Visibility = t.IsActive ? Visibility.Visible : Visibility.Hidden;
+            if (t.Host is { } host)
+            {
+                host.Visibility = t.IsActive && t.HasCompletedNavigation
+                    ? Visibility.Visible
+                    : Visibility.Hidden;
+            }
         }
         _active = tab;
         UpdateTabCount();
         SyncNavigationBar();
         UpdateStatusBar();
         MarkSessionDirty();
+        StartupTiming.Mark($"tab-activate {tab.Title} materialized={tab.IsMaterialized} completed={tab.HasCompletedNavigation}");
+
+        if (!tab.HasCompletedNavigation)
+        {
+            ShowTabLoadingOverlay(tab);
+            if (!tab.IsMaterialized)
+            {
+                Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(() => EnsureTabMaterialized(tab)));
+            }
+            else
+            {
+                Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(tab.StartInitialNavigation));
+            }
+        }
+        else
+        {
+            HideTabLoadingOverlay();
+        }
     }
 
     /// <summary>
@@ -534,11 +703,11 @@ public partial class MainWindow : FluentWindow
         if (tab.IsPinned) return;
 
         var wasActive = ReferenceEquals(_active, tab);
-        var closedPath = tab.Browser.NavigationLog.CurrentLocation?.ParsingName;
+        var closedPath = tab.SessionPath;
         _tabs.Remove(tab);
-        ViewContainer.Children.Remove(tab.Host);
-        tab.Host.Dispose();
-        tab.Browser.Dispose();
+        if (tab.Host is { } host) ViewContainer.Children.Remove(host);
+        if (ReferenceEquals(_loadingTab, tab)) HideTabLoadingOverlay();
+        tab.Dispose();
 
         if (_tabs.Count == 0)
         {
@@ -558,18 +727,23 @@ public partial class MainWindow : FluentWindow
         // do not let that programmatic Text assignment re-open suggestions.
         CancelBreadcrumbInteraction();
         _isAddressEditing = false;
-        var log = _active?.Browser.NavigationLog;
-        var location = log?.CurrentLocation;
-        var parsing = location?.ParsingName ?? string.Empty;
+        var tab = _active;
+        var log = tab?.Browser?.NavigationLog;
+        var location = tab?.CurrentLocation;
+        var parsing = tab?.CurrentPath ?? string.Empty;
         // Virtual shell folders (This PC, Network) have no file path; their
         // parsing name is a GUID. Show the friendly name instead, and keep the
         // GUID in Tag so Copy/Edit can still navigate to the real location.
-        AddressBox.Text = ShellDisplayName(parsing, location?.Name);
+        AddressBox.Text = ShellDisplayName(parsing, location?.Name ?? tab?.Title);
         _addressDisplayText = AddressBox.Text;
         AddressBox.Tag = parsing;
-        UpdateBreadcrumbs(parsing, location?.Name);
-        BackButton.IsEnabled = log?.CanNavigateBackward ?? false;
-        ForwardButton.IsEnabled = log?.CanNavigateForward ?? false;
+        UpdateBreadcrumbs(parsing, location?.Name ?? tab?.Title);
+        BackButton.IsEnabled =
+            tab?.Browser is not null &&
+            (log?.CanNavigateBackward ?? false);
+        ForwardButton.IsEnabled =
+            tab?.Browser is not null &&
+            (log?.CanNavigateForward ?? false);
         NewFolderButton.IsEnabled = CanModifyCurrentFolder();
         UpdatePasteButton();
     }
@@ -629,7 +803,11 @@ public partial class MainWindow : FluentWindow
         var isDrivePath = parsingPath.Length >= 2
                           && char.IsLetter(parsingPath[0])
                           && parsingPath[1] == ':';
-        if (!isDrivePath)
+        // UNC shares are filesystem paths too, but resolving their display
+        // name through the shell hits the network; build the segments from
+        // the path text instead.
+        var isUncPath = parsingPath.StartsWith(@"\\", StringComparison.Ordinal);
+        if (!isDrivePath && !isUncPath)
         {
             var label = "Shell 位置";
             if (ShellFallbackNames.TryGetValue(parsingPath, out var known))
@@ -658,10 +836,22 @@ public partial class MainWindow : FluentWindow
 
         var segments = parsingPath.Split(
             Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
-        var accumulated = string.Empty;
-        var searchStart = 0;
+        var accumulated = isUncPath ? @"\\" : string.Empty;
+        var searchStart = isUncPath ? 2 : 0;
         foreach (var segment in segments)
         {
+            if (isUncPath)
+            {
+                accumulated = accumulated.EndsWith(@"\", StringComparison.Ordinal)
+                    ? accumulated + segment
+                    : accumulated + Path.DirectorySeparatorChar + segment;
+                var start = Math.Min(searchStart, displayText.Length);
+                var length = Math.Min(segment.Length, displayText.Length - start);
+                result.Add(new BreadcrumbSegment(accumulated, segment, start, length));
+                searchStart = start + length + 1;
+                continue;
+            }
+
             accumulated = accumulated.Length == 0
                 ? segment
                 : accumulated + Path.DirectorySeparatorChar + segment;
@@ -808,6 +998,10 @@ public partial class MainWindow : FluentWindow
 
     private void MainWindow_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
+        // A new click anywhere invalidates a title-bar drag armed by a press
+        // whose release we never saw (e.g. the pointer left the title bar).
+        _isTitleBarDragArmed = false;
+
         // A click anywhere outside the address bar cancels a pending segment
         // navigation before its 250ms window expires.
         if (_pendingBreadcrumbSegment is not null && !BreadcrumbBar.IsMouseOver)
@@ -830,8 +1024,7 @@ public partial class MainWindow : FluentWindow
     private void CopyAddress_Click(object sender, RoutedEventArgs e)
     {
         // Prefer the raw parsing name so pasting still resolves virtual folders.
-        var path = AddressBox.Tag as string
-                   ?? _active?.Browser.NavigationLog.CurrentLocation?.ParsingName;
+        var path = AddressBox.Tag as string ?? _active?.CurrentPath;
         if (string.IsNullOrEmpty(path)) return;
         try
         {
@@ -857,11 +1050,18 @@ public partial class MainWindow : FluentWindow
 
     private void NavigateActive(string path)
     {
-        if (_active is null) return;
+        if (_active is not { } tab) return;
         CloseAddressSuggestions();
         try
         {
-            _active.Browser.Navigate(ShellObject.FromParsingName(path));
+            tab.NavigateTo(path);
+            if (!tab.IsMaterialized)
+            {
+                ShowTabLoadingOverlay(tab);
+                Dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(() => EnsureTabMaterialized(tab)));
+            }
         }
         catch (Exception ex)
         {
@@ -874,7 +1074,6 @@ public partial class MainWindow : FluentWindow
     private void RestoreSession()
     {
         var session = AppStorage.LoadSession();
-        var paths = session?.Tabs.Where(p => !string.IsNullOrWhiteSpace(p)).ToList() ?? new List<string>();
         _recentlyClosed.Clear();
         if (session is { } loadedSession)
         {
@@ -884,6 +1083,7 @@ public partial class MainWindow : FluentWindow
             }
         }
 
+        var paths = session?.Tabs ?? new List<string>();
         // First run: take the tab set from 360 Folder if it has one.
         if (paths.Count == 0) paths = Import360.ImportSessionPaths();
 
@@ -892,37 +1092,47 @@ public partial class MainWindow : FluentWindow
             AddTab(AppSettings.Current.NewTabPath);
             return;
         }
-        foreach (var p in paths) AddTab(p);
-        // Pinned flags are parallel to the saved paths; the order already has
-        // the pinned block at the front, so applying them keeps it intact.
-        if (session?.Pinned is { } pinnedFlags)
+
+        // Tabs stay metadata-only until first activation, so the window can
+        // render without building shell HWNDs for every restored tab.
+        // Titles and pinned flags are parallel to paths; older session files
+        // have neither, and empty/missing entries fall back to the path name.
+        var titles = session?.Titles;
+        var pinnedFlags = session?.Pinned;
+        var created = new List<BrowserTab>(paths.Count);
+        for (var i = 0; i < paths.Count; i++)
         {
-            for (var i = 0; i < _tabs.Count && i < pinnedFlags.Count; i++)
-            {
-                _tabs[i].IsPinned = pinnedFlags[i];
-            }
+            if (string.IsNullOrWhiteSpace(paths[i])) continue;
+            var title = titles is not null && i < titles.Count ? titles[i] : null;
+            var tab = CreateTab(paths[i], title);
+            if (pinnedFlags is not null && i < pinnedFlags.Count) tab.IsPinned = pinnedFlags[i];
+            created.Add(tab);
         }
-        if (session is { } s && s.ActiveIndex >= 0 && s.ActiveIndex < _tabs.Count)
+
+        if (created.Count == 0)
         {
-            ActivateTab(_tabs[s.ActiveIndex]);
+            AddTab(AppSettings.Current.NewTabPath);
+            return;
         }
-        else
-        {
-            ActivateTab(_tabs[0]);
-        }
+
+        var savedActive = session?.ActiveIndex ?? -1;
+        var active = savedActive >= 0 && savedActive < created.Count ? created[savedActive] : created[0];
+        ActivateTab(active);
     }
 
     private SessionData BuildSessionData()
     {
         var paths = new List<string>();
+        var titles = new List<string>();
         var pinned = new List<bool>();
         var activeIndex = 0;
         for (var i = 0; i < _tabs.Count; i++)
         {
-            var path = _tabs[i].Browser.NavigationLog.CurrentLocation?.ParsingName;
+            var path = _tabs[i].SessionPath;
             if (string.IsNullOrEmpty(path)) continue;
             if (ReferenceEquals(_tabs[i], _active)) activeIndex = paths.Count;
             paths.Add(path);
+            titles.Add(_tabs[i].SessionTitle);
             pinned.Add(_tabs[i].IsPinned);
         }
 
@@ -931,6 +1141,7 @@ public partial class MainWindow : FluentWindow
             Tabs = paths,
             ActiveIndex = activeIndex,
             Pinned = pinned,
+            Titles = titles,
         };
     }
 
@@ -942,36 +1153,32 @@ public partial class MainWindow : FluentWindow
         MarkSessionDirty();
     }
 
-    private void MarkSessionDirty()
-    {
-        if (_isSavingSession) return;
-        _sessionSaveTimer?.Start();
-    }
+    private void MarkSessionDirty() => _sessionSaveTimer?.Start();
 
     private void StopSessionSaveTimer() => _sessionSaveTimer?.Stop();
 
-    private void SaveCurrentSession()
+    private void SaveCurrentSession(bool synchronous = false)
     {
-        if (_isSavingSession) return;
-
-        _isSavingSession = true;
         StopSessionSaveTimer();
-        try
+        var data = BuildSessionData();
+        data.RecentlyClosed = new List<string>(_recentlyClosed);
+        if (synchronous)
         {
-            var data = BuildSessionData();
-            data.RecentlyClosed = new List<string>(_recentlyClosed);
+            // A queued write may still be in flight; let it land first so the
+            // final payload is the newest one on disk.
+            AppStorage.WaitForPendingWrites(TimeSpan.FromSeconds(2));
             AppStorage.SaveSession(data);
         }
-        finally
+        else
         {
-            _isSavingSession = false;
+            AppStorage.SaveSessionAsync(data);
         }
     }
 
     private void FlushSessionBeforeClose()
     {
         StopSessionSaveTimer();
-        SaveCurrentSession();
+        SaveCurrentSession(synchronous: true);
     }
 
     private void ReopenClosedTab()
@@ -1172,8 +1379,17 @@ public partial class MainWindow : FluentWindow
 
     private string? CurrentFolderPath()
     {
-        var path = _active?.Browser.NavigationLog?.CurrentLocation?.ParsingName;
-        return !string.IsNullOrWhiteSpace(path) && Directory.Exists(path) ? path : null;
+        // Directory.Exists on an offline UNC share or a disconnected mapped
+        // drive blocks for the network timeout. Trust the loaded shell view
+        // instead; if the folder vanished, the file command reports the error.
+        if (_active is not { HasCompletedNavigation: true } tab) return null;
+        var path = tab.CurrentPath;
+        if (string.IsNullOrWhiteSpace(path) ||
+            path.StartsWith("::", StringComparison.Ordinal))
+        {
+            return null;
+        }
+        return path;
     }
 
     private bool CanModifyCurrentFolder() => CurrentFolderPath() is not null;
@@ -1191,7 +1407,7 @@ public partial class MainWindow : FluentWindow
                 candidate = Path.Combine(folder, $"{name} ({suffix})");
             }
             Directory.CreateDirectory(candidate);
-            _active?.Browser.Navigate(ShellObject.FromParsingName(folder));
+            _active?.Browser?.Navigate(ShellObject.FromParsingName(folder));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -1206,9 +1422,9 @@ public partial class MainWindow : FluentWindow
 
     private void SetFileClipboard(bool cut)
     {
-        if (_active is not { } tab) return;
+        if (_active is not { } tab || tab.Browser is not { } browser) return;
         var paths = new System.Collections.Specialized.StringCollection();
-        foreach (var item in tab.Browser.SelectedItems)
+        foreach (var item in browser.SelectedItems)
         {
             if (item is not ShellObject shellItem) continue;
             var path = shellItem.ParsingName;
@@ -1289,10 +1505,10 @@ public partial class MainWindow : FluentWindow
     private List<string> SelectedShellPaths()
     {
         var result = new List<string>();
-        if (_active is not { } tab) return result;
+        if (_active is not { } tab || tab.Browser is not { } browser) return result;
         try
         {
-            foreach (var item in tab.Browser.SelectedItems)
+            foreach (var item in browser.SelectedItems)
             {
                 if (item is not ShellObject shellItem) continue;
                 if (Path.IsPathRooted(shellItem.ParsingName)) result.Add(shellItem.ParsingName);
@@ -1307,9 +1523,9 @@ public partial class MainWindow : FluentWindow
 
     private void RefreshActive()
     {
-        if (_active?.Browser.NavigationLog.CurrentLocation is { } location)
+        if (_active is { } tab && tab.CurrentLocation is { } location)
         {
-            RefreshTab(_active, location);
+            RefreshTab(tab, location);
         }
     }
 
@@ -1336,8 +1552,9 @@ public partial class MainWindow : FluentWindow
         if (_active is not { } tab) return;
         try
         {
-            if (tab.Browser.SelectedItems.Count == 1
-                && tab.Browser.SelectedItems[0] is ShellObject item)
+            if (tab.Browser is { } browser
+                && browser.SelectedItems.Count == 1
+                && browser.SelectedItems[0] is ShellObject item)
             {
                 ShowShellProperties(item.ParsingName);
             }
@@ -1494,7 +1711,7 @@ public partial class MainWindow : FluentWindow
     private void SyncToolbarMenuState()
     {
         ReopenClosedTabMenuItem.IsEnabled = _recentlyClosed.Count > 0;
-        OpenTerminalMenuItem.IsEnabled = _active?.Browser.NavigationLog.CurrentLocation is not null;
+        OpenTerminalMenuItem.IsEnabled = _active?.CurrentLocation is not null;
     }
 
     private void ReopenClosedTab_Click(object sender, RoutedEventArgs e) => ReopenClosedTab();
@@ -1565,15 +1782,15 @@ public partial class MainWindow : FluentWindow
     // radio choice, so a best-effort match is all the check marks can show.
     private void SyncViewMenuChecks()
     {
-        var current = _active is { } tab && tab.Browser.IsHandleCreated
-            ? tab.Browser.ContentOptions.ViewMode
+        var current = _active?.Browser is { IsHandleCreated: true } browser
+            ? browser.ContentOptions.ViewMode
             : ExplorerBrowserViewMode.Auto;
         var thumbnailSize = 0;
-        if (_active is { } activeTab && activeTab.Browser.IsHandleCreated)
+        if (_active?.Browser is { IsHandleCreated: true } activeBrowser)
         {
             try
             {
-                thumbnailSize = activeTab.Browser.ContentOptions.ThumbnailSize;
+                thumbnailSize = activeBrowser.ContentOptions.ThumbnailSize;
             }
             catch (COMException)
             {
@@ -1623,7 +1840,7 @@ public partial class MainWindow : FluentWindow
 
     private void UpdateStatusBar()
     {
-        if (_active is not { } tab)
+        if (_active is not { } tab || tab.Browser is not { } browser)
         {
             StatusBar.Visibility = Visibility.Collapsed;
             StatusText.Text = string.Empty;
@@ -1632,8 +1849,8 @@ public partial class MainWindow : FluentWindow
         }
         try
         {
-            var items = tab.Browser.Items;
-            var selected = tab.Browser.SelectedItems;
+            var items = browser.Items;
+            var selected = browser.SelectedItems;
             var selectedCount = selected.Count;
             var fileBytes = 0UL;
             var folders = 0;
@@ -1687,7 +1904,7 @@ public partial class MainWindow : FluentWindow
 
     private void OpenTerminal_Click(object sender, RoutedEventArgs e)
     {
-        var path = _active?.Browser.NavigationLog.CurrentLocation?.ParsingName;
+        var path = _active?.CurrentPath;
         if (string.IsNullOrWhiteSpace(path)) return;
 
         var directory = Directory.Exists(path) ? path : Path.GetDirectoryName(path);
@@ -1870,24 +2087,28 @@ public partial class MainWindow : FluentWindow
         // CloseTab call would close the window, and we must not push closed
         // paths into "recently closed" during a workspace switch.
         _recentlyClosed.Clear();
+        _tabLoadingWatchdog.Stop();
+        _loadingTab = null;
         foreach (var tab in _tabs.Reverse())
         {
             _tabs.Remove(tab);
-            ViewContainer.Children.Remove(tab.Host);
-            tab.Host.Dispose();
-            tab.Browser.Dispose();
+            if (tab.Host is { } host) ViewContainer.Children.Remove(host);
+            tab.Dispose();
         }
 
         foreach (var path in match.Tabs.Where(p => !string.IsNullOrWhiteSpace(p)))
         {
-            AddTab(path);
+            CreateTab(path);
         }
         if (_tabs.Count == 0)
         {
             AddTab(AppSettings.Current.NewTabPath);
         }
-        var active = Math.Min(Math.Max(match.ActiveIndex, 0), _tabs.Count - 1);
-        ActivateTab(_tabs[active]);
+        else
+        {
+            var active = Math.Min(Math.Max(match.ActiveIndex, 0), _tabs.Count - 1);
+            ActivateTab(_tabs[active]);
+        }
         match.LastUsedAt = DateTime.Now;
         var workspaces = AppStorage.LoadWorkspaces();
         var stored = workspaces.FirstOrDefault(w => string.Equals(w.Name, match.Name, StringComparison.Ordinal));
@@ -1897,10 +2118,67 @@ public partial class MainWindow : FluentWindow
 
     private void TabStripBackground_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.ChangedButton != MouseButton.Left) return;
         if (e.ClickCount == 2)
         {
             AddTab(AppSettings.Current.NewTabPath);
             e.Handled = true;
+            return;
+        }
+
+        // TabBar now spans the whole title bar so the caption buttons stay on
+        // screen, which leaves WPF-UI's TitleBar with no HTCAPTION area to drag
+        // (it treats the entire Header as content). Arm a drag on the bare
+        // background only; tabs, the menu and the new-tab button keep theirs.
+        if (e.ClickCount == 1 && ReferenceEquals(e.OriginalSource, TabBar))
+        {
+            _titleBarDragStart = e.GetPosition(this);
+            _isTitleBarDragArmed = true;
+        }
+    }
+
+    private bool TryStartTitleBarDrag(System.Windows.Input.MouseEventArgs e)
+    {
+        if (!_isTitleBarDragArmed) return false;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            _isTitleBarDragArmed = false;
+            return false;
+        }
+
+        var position = e.GetPosition(this);
+        var moved =
+            Math.Abs(position.X - _titleBarDragStart.X) >= SystemParameters.MinimumHorizontalDragDistance
+            || Math.Abs(position.Y - _titleBarDragStart.Y) >= SystemParameters.MinimumVerticalDragDistance;
+        if (!moved) return true;
+
+        _isTitleBarDragArmed = false;
+        DragTitleBarWindow();
+        return true;
+    }
+
+    private void DragTitleBarWindow()
+    {
+        if (WindowState == WindowState.Maximized)
+        {
+            // DragMove keeps a maximized window in place; restore it under the
+            // cursor first, the way a native caption drag does.
+            var cursor = Mouse.GetPosition(this);
+            var horizontalRatio = ActualWidth > 0 ? cursor.X / ActualWidth : 0.5;
+            var screen = PointToScreen(cursor);
+            var dpi = VisualTreeHelper.GetDpi(this);
+            WindowState = WindowState.Normal;
+            Left = (screen.X / dpi.DpiScaleX) - (Width * horizontalRatio);
+            Top = (screen.Y / dpi.DpiScaleY) - 16;
+        }
+
+        try
+        {
+            DragMove();
+        }
+        catch (InvalidOperationException)
+        {
+            // The button was released between the move and the drag call.
         }
     }
 
@@ -1914,6 +2192,8 @@ public partial class MainWindow : FluentWindow
 
     private void TabStrip_PreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
     {
+        if (TryStartTitleBarDrag(e)) return;
+
         if (_dragTab is null || e.LeftButton != MouseButtonState.Pressed) return;
         // Pinned tabs keep their slot, so they are not draggable.
         if (_dragTab.IsPinned) return;
@@ -1940,6 +2220,7 @@ public partial class MainWindow : FluentWindow
 
     private void TabStrip_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        _isTitleBarDragArmed = false;
         if (_dragTab is null) return;
         var tab = _dragTab;
         _dragTab = null;
@@ -2019,24 +2300,22 @@ public partial class MainWindow : FluentWindow
     private void TabDuplicate_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: BrowserTab tab }) return;
-        var path = tab.Browser.NavigationLog.CurrentLocation?.ParsingName
-                   ?? AppSettings.Current.NewTabPath;
-        AddTab(path);
+        AddTab(tab.CurrentPath);
     }
 
     private void Back_Click(object sender, RoutedEventArgs e)
     {
-        _active?.Browser.NavigateLogLocation(NavigationLogDirection.Backward);
+        _active?.NavigateHistory(NavigationLogDirection.Backward);
     }
 
     private void Forward_Click(object sender, RoutedEventArgs e)
     {
-        _active?.Browser.NavigateLogLocation(NavigationLogDirection.Forward);
+        _active?.NavigateHistory(NavigationLogDirection.Forward);
     }
 
     private void Up_Click(object sender, RoutedEventArgs e)
     {
-        if (_active?.Browser.NavigationLog.CurrentLocation?.Parent is { } parent)
+        if (_active?.CurrentLocation?.Parent is { } parent)
         {
             NavigateActive(parent.ParsingName);
         }
@@ -2044,9 +2323,9 @@ public partial class MainWindow : FluentWindow
 
     private void Refresh_Click(object sender, RoutedEventArgs e)
     {
-        if (_active?.Browser.NavigationLog.CurrentLocation is { } location)
+        if (_active is { } tab && tab.CurrentLocation is { } location)
         {
-            RefreshTab(_active, location);
+            RefreshTab(tab, location);
         }
     }
 
@@ -2160,9 +2439,9 @@ public partial class MainWindow : FluentWindow
         if (Keyboard.Modifiers != ModifierKeys.Control) return;
         if (e.Key == Key.F5 || e.Key == Key.R)
         {
-            if (_active?.Browser.NavigationLog.CurrentLocation is { } location)
+            if (_active is { } activeTab && activeTab.CurrentLocation is { } location)
             {
-                RefreshTab(_active, location);
+                RefreshTab(activeTab, location);
             }
             e.Handled = true;
         }
@@ -2223,7 +2502,7 @@ public partial class MainWindow : FluentWindow
             string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
         _recentLocations.Insert(0, new RecentLocation { Path = path, VisitedAt = DateTime.Now });
         if (_recentLocations.Count > 500) _recentLocations.RemoveRange(500, _recentLocations.Count - 500);
-        AppStorage.SaveRecentLocations(_recentLocations);
+        AppStorage.SaveRecentLocationsAsync(_recentLocations);
         RefreshRecentLocationsDropdown();
         if (HistoryPanel.Visibility == Visibility.Visible) RefreshHistoryPage();
     }
@@ -2598,7 +2877,7 @@ public partial class MainWindow : FluentWindow
         var normalized = folderPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var existing = _tabs.FirstOrDefault(t =>
         {
-            var parsing = t.Browser.NavigationLog.CurrentLocation?.ParsingName;
+            var parsing = t.CurrentPath;
             if (string.IsNullOrEmpty(parsing)) return false;
             parsing = parsing.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             return string.Equals(parsing, normalized, StringComparison.OrdinalIgnoreCase);
@@ -2625,7 +2904,7 @@ public partial class MainWindow : FluentWindow
         _addressSuggestionsCts = cts;
         var query = AddressBox.Text;
         var recentPaths = _recentLocations.Select(item => item.Path).ToList();
-        var currentPath = _active?.Browser.NavigationLog.CurrentLocation?.ParsingName;
+        var currentPath = _active?.CurrentPath;
         _ = RefreshAddressSuggestionsAsync(query, recentPaths, currentPath, cts, immediate);
     }
 

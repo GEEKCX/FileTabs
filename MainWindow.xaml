@@ -94,13 +94,13 @@
                         </ToggleButton>
                         <Grid Grid.Column="1">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <!-- 标签条和 + 分列摆放：标签区止于按钮左边缘，
-                                 最后一块标签的 8px 反向外圆弧才不会被按钮底色盖住。
-                                 标签过多时在列内裁切。 -->
-                            <ItemsControl x:Name="TabStrip" Grid.Column="0" ClipToBounds="True">
+                            <!-- 标签和 + 同组摆放，+ 紧跟最后一块标签；右侧 * 列留白，
+                                 既不会把窗口按钮挤出窗口，也给标题栏拖动留出区域。 -->
+                            <StackPanel Grid.Column="0" Orientation="Horizontal">
+                            <ItemsControl x:Name="TabStrip" ClipToBounds="True">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <!-- 左侧留 8px 给第一块标签的反向外圆弧。 -->
@@ -225,12 +225,13 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                            <Button x:Name="NewTabButton" Grid.Column="1" Width="28" Height="30" Padding="0"
+                            <Button x:Name="NewTabButton" Width="28" Height="30" Padding="0"
                                     Style="{StaticResource Fluent.IconButton}"
                                     Margin="2,6,0,0" VerticalAlignment="Bottom"
                                     Click="NewTab_Click" ToolTip="New tab (Ctrl+T)">
                                 <ui:SymbolIcon Symbol="Add20" FontSize="13"/>
                             </Button>
+                            </StackPanel>
                         </Grid>
                     </Grid>
                 </Border>
@@ -685,6 +686,24 @@
 
             <!-- one WindowsFormsHost per tab, stacked here; only active is visible -->
             <Grid x:Name="ViewContainer" Grid.Column="0"/>
+
+            <!-- Covers the empty body until the lazy tab's shell view has
+                 navigated. The host stays hidden meanwhile: a visible
+                 WindowsFormsHost HWND would draw over this WPF layer. -->
+            <Border x:Name="TabLoadingOverlay" Grid.Column="0"
+                    Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    Visibility="Collapsed">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            MaxWidth="420" Margin="24">
+                    <TextBlock x:Name="TabLoadingTitle"
+                               FontSize="16" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                    <TextBlock x:Name="TabLoadingHint" Margin="0,8,0,0"
+                               FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </Border>
 
             <!-- Access history drawer: takes the bottom 20% of the body,
                  leaving the active file view visible above it. -->

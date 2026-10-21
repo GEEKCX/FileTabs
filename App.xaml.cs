@@ -12,7 +12,15 @@ namespace FileTabs;
 
 public partial class App : Application
 {
-    private const string PipeName = "FileTabs.SingleInstance.Pipe";
+    private static readonly string InstanceSuffix =
+        Environment.GetEnvironmentVariable("FILETABS_INSTANCE_KEY") is { Length: > 0 } key
+            ? "." + key
+            : string.Empty;
+
+    private static readonly string MutexName = @"Local\FileTabs.SingleInstance" + InstanceSuffix;
+    private static readonly string RestoreEventName = @"Local\FileTabs.RestoreSignal" + InstanceSuffix;
+    private static readonly string PipeName = "FileTabs.SingleInstance.Pipe" + InstanceSuffix;
+
     private Mutex? _singleInstanceMutex;
     private bool _ownsSingleInstanceMutex;
     private EventWaitHandle? _restoreSignal;
@@ -27,7 +35,7 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        _singleInstanceMutex = new Mutex(true, @"Local\FileTabs.SingleInstance", out var isNewInstance);
+        _singleInstanceMutex = new Mutex(true, MutexName, out var isNewInstance);
         _ownsSingleInstanceMutex = isNewInstance;
         if (!isNewInstance)
         {
@@ -35,7 +43,7 @@ public partial class App : Application
             // passed on our command line, then leave.
             try
             {
-                _restoreSignal = EventWaitHandle.OpenExisting(@"Local\FileTabs.RestoreSignal");
+                _restoreSignal = EventWaitHandle.OpenExisting(RestoreEventName);
                 _restoreSignal.Set();
             }
             catch (WaitHandleCannotBeOpenedException)
@@ -47,7 +55,7 @@ public partial class App : Application
             return;
         }
 
-        _restoreSignal = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\FileTabs.RestoreSignal");
+        _restoreSignal = new EventWaitHandle(false, EventResetMode.AutoReset, RestoreEventName);
         ThreadPool.UnsafeRegisterWaitForSingleObject(
             _restoreSignal,
             static (_, timedOut) =>
@@ -70,6 +78,7 @@ public partial class App : Application
             false);
 
         base.OnStartup(e);
+        StartupTiming.Mark("app-onstartup");
 
         // No StartupUri in App.xaml on purpose: only the first instance may
         // build a window. A second instance (the one the shell redirect spawns
@@ -78,6 +87,7 @@ public partial class App : Application
         var main = new MainWindow();
         this.MainWindow = main;
         main.Show();
+        StartupTiming.Mark("window-show-returned");
 
         if (AppSettings.Current.DropPointEnabled)
         {
@@ -89,16 +99,19 @@ public partial class App : Application
         _ = Task.Run(() => PipeServerLoopAsync(_pipeCts.Token));
 
         // Handle the path we ourselves were started with.
-        if (e.Args.Length > 0 && Directory.Exists(e.Args[0]))
+        if (e.Args.Length > 0)
         {
-            string path = e.Args[0];
-            Dispatcher.BeginInvoke(() =>
+            string path = NormalizeShellPath(e.Args[0]);
+            if (Directory.Exists(path))
             {
-                if (Current?.MainWindow is MainWindow main)
+                Dispatcher.BeginInvoke(() =>
                 {
-                    main.OpenPathInNewTab(path);
-                }
-            });
+                    if (Current?.MainWindow is MainWindow main)
+                    {
+                        main.OpenPathInNewTab(path);
+                    }
+                });
+            }
         }
 
         // Crash-report triage for a tool used as a primary file manager.
@@ -133,10 +146,28 @@ public partial class App : Application
         base.OnExit(e);
     }
 
+    /// <summary>
+    /// Verbs redirected to this executable use the shell's
+    /// "exe" "%1" shape. When %1 is a drive root ("C:\"),
+    /// CommandLineToArgvW treats the closing \" as an escaped quote, so the
+    /// process receives C:" (the backslash is consumed by the escape).
+    /// Restore it; otherwise Directory.Exists rejects the path and the open
+    /// request is silently dropped.
+    /// </summary>
+    private static string NormalizeShellPath(string raw)
+    {
+        var path = raw.Trim();
+        if (path.Length >= 2 && path[^1] == '"')
+        {
+            path = path[..^1] + '\\';
+        }
+        return path;
+    }
+
     private static void TrySendPathToRunningInstance(string[] args)
     {
         if (args.Length == 0) return;
-        string path = args[0];
+        string path = NormalizeShellPath(args[0]);
         if (!Directory.Exists(path)) return;
         try
         {
@@ -164,15 +195,19 @@ public partial class App : Application
                 await server.WaitForConnectionAsync(token);
                 using var reader = new StreamReader(server);
                 string? line = await reader.ReadLineAsync(token);
-                if (!string.IsNullOrEmpty(line) && Directory.Exists(line))
+                if (!string.IsNullOrEmpty(line))
                 {
-                    _ = Dispatcher.BeginInvoke(() =>
+                    var path = NormalizeShellPath(line);
+                    if (Directory.Exists(path))
                     {
-                        if (Current?.MainWindow is MainWindow main)
+                        _ = Dispatcher.BeginInvoke(() =>
                         {
-                            main.OpenPathInNewTab(line);
-                        }
-                    });
+                            if (Current?.MainWindow is MainWindow main)
+                            {
+                                main.OpenPathInNewTab(path);
+                            }
+                        });
+                    }
                 }
             }
             catch (OperationCanceledException) { break; }

@@ -1,12 +1,13 @@
 <# Produce a self-contained single-file release in .\publish\ #>
 
-& "D:\Programs\dotnet\dotnet.exe" publish FileTabs.csproj `
+& dotnet publish FileTabs.csproj `
     -c Release `
     -r win-x64 `
     --self-contained true `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:EnableCompressionInSingleFile=true `
+    -p:PublishReadyToRun=true `
+    -p:EnableCompressionInSingleFile=false `
     -p:DebugType=none `
     -v minimal
 

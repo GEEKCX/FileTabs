@@ -24,6 +24,9 @@ public sealed class SessionData
     public List<string> RecentlyClosed { get; set; } = new();
     // Parallel to Tabs; kept separate so older session files still load.
     public List<bool> Pinned { get; set; } = new();
+    // Parallel to Tabs. Lazy-restored tabs need a title before their shell
+    // view exists; older files have no titles and fall back to the path name.
+    public List<string> Titles { get; set; } = new();
 }
 
 public sealed class Workspace
@@ -119,8 +122,13 @@ public enum TerminalKind
 /// </summary>
 public static class AppStorage
 {
-    public static string DataDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FileTabs");
+    // FILETABS_DATA_DIR lets automated checks run against a scratch profile
+    // instead of the signed-in user's real session and history.
+    public static string DataDirectory { get; } =
+        Environment.GetEnvironmentVariable("FILETABS_DATA_DIR") is { Length: > 0 } customDataDir
+            ? Path.GetFullPath(customDataDir)
+            : Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FileTabs");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -183,12 +191,31 @@ public static class AppStorage
     {
         try
         {
-            WriteFileAtomically(Path.Combine(DataDirectory, "session.json"),
+            WriteFileLocked(Path.Combine(DataDirectory, "session.json"),
                 JsonSerializer.Serialize(session, JsonOptions));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Log($"SaveSession failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Snapshot-and-forget variant used while the window is running: the JSON
+    /// is captured on the caller thread, the fsync and rename happen off it.
+    /// Only the newest snapshot per file is written when several arrive
+    /// while a write is already in flight.
+    /// </summary>
+    public static void SaveSessionAsync(SessionData session)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(session, JsonOptions);
+            GetWriteQueue("session.json").Post(json);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Log($"SaveSessionAsync failed: {ex.Message}");
         }
     }
 
@@ -243,12 +270,124 @@ public static class AppStorage
     {
         try
         {
-            WriteFileAtomically(Path.Combine(DataDirectory, "history.json"),
+            WriteFileLocked(Path.Combine(DataDirectory, "history.json"),
                 JsonSerializer.Serialize(recentLocations, JsonOptions));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Log($"SaveRecentLocations failed: {ex.Message}");
+        }
+    }
+
+    public static void SaveRecentLocationsAsync(IEnumerable<RecentLocation> recentLocations)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(recentLocations, JsonOptions);
+            GetWriteQueue("history.json").Post(json);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Log($"SaveRecentLocationsAsync failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Lets the close path wait for an in-flight background write.</summary>
+    public static void WaitForPendingWrites(TimeSpan timeout)
+    {
+        foreach (var queue in WriteQueues.Values)
+        {
+            queue.WaitForIdle(timeout);
+        }
+    }
+
+    // Guards the temp-file + rename step so a synchronous save (settings,
+    // bookmarks, final session flush) cannot race a queued background write.
+    private static readonly object WriteLock = new();
+    private static readonly Dictionary<string, LatestWriteQueue> WriteQueues = new(StringComparer.Ordinal);
+
+    private static LatestWriteQueue GetWriteQueue(string fileName)
+    {
+        lock (WriteQueues)
+        {
+            if (!WriteQueues.TryGetValue(fileName, out var queue))
+            {
+                queue = new LatestWriteQueue(Path.Combine(DataDirectory, fileName));
+                WriteQueues[fileName] = queue;
+            }
+            return queue;
+        }
+    }
+
+    private static void WriteFileLocked(string path, string content)
+    {
+        lock (WriteLock)
+        {
+            WriteFileAtomically(path, content);
+        }
+    }
+
+    // Writes the most recent snapshot at a time: while one fsync runs, newer
+    // snapshots replace the pending payload instead of queueing behind it.
+    private sealed class LatestWriteQueue
+    {
+        private readonly string _path;
+        private readonly object _gate = new();
+        private string? _pendingContent;
+        private Task _pump = Task.CompletedTask;
+        private bool _running;
+
+        public LatestWriteQueue(string path) => _path = path;
+
+        public void Post(string content)
+        {
+            lock (_gate)
+            {
+                _pendingContent = content;
+                if (_running) return;
+                _running = true;
+                _pump = Task.Run(PumpAsync);
+            }
+        }
+
+        public void WaitForIdle(TimeSpan timeout)
+        {
+            Task pump;
+            lock (_gate) pump = _pump;
+            try
+            {
+                pump.Wait(timeout);
+            }
+            catch (AggregateException ex)
+            {
+                Log($"Background write did not finish: {ex.GetBaseException().Message}");
+            }
+        }
+
+        private async Task PumpAsync()
+        {
+            while (true)
+            {
+                string? content;
+                lock (_gate)
+                {
+                    content = _pendingContent;
+                    _pendingContent = null;
+                    if (content is null)
+                    {
+                        _running = false;
+                        return;
+                    }
+                }
+                try
+                {
+                    await Task.Run(() => WriteFileLocked(_path, content));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Log($"Background write to {Path.GetFileName(_path)} failed: {ex.Message}");
+                }
+            }
         }
     }
 

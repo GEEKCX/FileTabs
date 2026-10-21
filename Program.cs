@@ -13,6 +13,7 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        StartupTiming.Mark("process-main");
         // WPF's default adorner selection paints over the glyphs, so
         // SelectionTextBrush is ignored and an opaque highlight hides the text.
         AppContext.SetSwitch(
