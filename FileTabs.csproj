@@ -13,7 +13,7 @@
     <!-- Program.cs owns Main so the registry switches can run before WPF
          exists and without creating the main window. -->
     <StartupObject>FileTabs.Program</StartupObject>
-    <Version>1.1.1</Version>
+    <Version>1.1.2</Version>
     <Product>FileTabs</Product>
     <Description>Windows 多标签文件管理器，基于原生 Shell 视图。</Description>
   </PropertyGroup>
