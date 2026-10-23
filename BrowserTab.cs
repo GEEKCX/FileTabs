@@ -65,6 +65,15 @@ public sealed class BrowserTab : INotifyPropertyChanged
     /// </summary>
     public event Action<int>? TabSwitchRequested;
 
+    /// <summary>
+    /// A Ctrl shortcut typed while the native shell view owns the focus. The
+    /// shell's child HWNDs take the keyboard, so WM_KEYDOWN never reaches the
+    /// main window and the WPF key path cannot see it; the subclass reports
+    /// the virtual key instead. Arguments are the virtual key code and whether
+    /// Shift was held.
+    /// </summary>
+    public event Action<int, bool>? ShellShortcutRequested;
+
     // ExplorerBrowser throws when ViewMode is assigned before the shell view
     // exists; remember the request and push it once the handle is created.
     private ExplorerBrowserViewMode _requestedViewMode = ExplorerBrowserViewMode.Auto;
@@ -653,9 +662,20 @@ public sealed class BrowserTab : INotifyPropertyChanged
 
     private const uint WmMouseWheel = 0x020A;
     private const uint WmSysKeyDown = 0x0104;
+    private const uint WmKeyDown = 0x0100;
     private const int VkControl = 0x11;
     private const int VkLeft = 0x25;
     private const int VkRight = 0x27;
+    private const int VkShift = 0x10;
+    private const int VkF5 = 0x74;
+
+    // Ctrl shortcuts the window owns. The shell has its own bindings on most
+    // of these (Ctrl+F search, Ctrl+L address bar, Ctrl+H history, Ctrl+W
+    // close window), so the subclass swallows the key and lets the window act
+    // instead. Everything else -- Ctrl+A/C/V/X/Z, Ctrl+Shift+N -- must reach
+    // the shell untouched or file operations break.
+    private static bool IsWindowShortcut(int vk)
+        => vk is 'T' or 'W' or 'H' or 'F' or 'L' or 'S' or 'O' or 'R' or VkF5;
 
     // Keyboard and wheel messages go to the deepest shell window, not to the
     // ExplorerBrowser HWND itself, so every descendant needs the subclass.
@@ -715,6 +735,21 @@ public sealed class BrowserTab : INotifyPropertyChanged
             if (vk is VkLeft or VkRight)
             {
                 tab.TabSwitchRequested?.Invoke(vk == VkLeft ? -1 : 1);
+                return IntPtr.Zero;
+            }
+        }
+
+        // Ctrl shortcuts never reach the main window while the shell owns the
+        // keyboard, so the window's PreviewKeyDown handler would never fire.
+        // Report the key and swallow it, otherwise the shell runs its own
+        // binding for the same chord as well.
+        if (msg == WmKeyDown && (GetKeyState(VkControl) & 0x8000) != 0)
+        {
+            var vk = (int)wParam.ToInt64();
+            if (IsWindowShortcut(vk))
+            {
+                var shift = (GetKeyState(VkShift) & 0x8000) != 0;
+                tab.ShellShortcutRequested?.Invoke(vk, shift);
                 return IntPtr.Zero;
             }
         }

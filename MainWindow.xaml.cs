@@ -50,6 +50,12 @@ public partial class MainWindow : FluentWindow
     private bool _everythingAvailable = true;
     private DispatcherTimer? _sessionSaveTimer;
     private Rect _normalWindowBounds;
+    // Size-move loop state: a border drag resizes the shell view on every
+    // tick, so the body is hidden until the drag ends (see WndProcHook).
+    private bool _inSizeMove;
+    private bool _shellViewsSuppressed;
+    private int _sizeMoveStartClientWidth;
+    private int _sizeMoveStartClientHeight;
     private List<AddressSuggestion> _addressSuggestions = new();
     private CancellationTokenSource? _addressSuggestionsCts;
     private bool _addressSuggestionChosen;
@@ -57,6 +63,9 @@ public partial class MainWindow : FluentWindow
     private bool _isApplyingAppearanceSettings;
     private readonly DispatcherTimer _breadcrumbNavTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
     private readonly DispatcherTimer _tabLoadingWatchdog = new() { Interval = TimeSpan.FromSeconds(3) };
+    // Polls the left button while a size-move loop is running; some drags end
+    // without WM_EXITSIZEMOVE and must not leave the body collapsed.
+    private readonly DispatcherTimer _sizeMoveWatchdog = new() { Interval = TimeSpan.FromMilliseconds(150) };
     private BrowserTab? _loadingTab;
     private bool _loadingFallbackApplied;
     private BreadcrumbSegment? _pendingBreadcrumbSegment;
@@ -106,6 +115,7 @@ public partial class MainWindow : FluentWindow
         ProbeEverythingAvailability();
         _breadcrumbNavTimer.Tick += (_, _) => NavigatePendingBreadcrumb();
         _tabLoadingWatchdog.Tick += (_, _) => HandleTabLoadingTimeout();
+        _sizeMoveWatchdog.Tick += (_, _) => HandleSizeMoveWatchdog();
         // Coalesce rapid save triggers (navigation, tab switch, drag, close).
         _sessionSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _sessionSaveTimer.Tick += (_, _) => SaveCurrentSession();
@@ -260,42 +270,130 @@ public partial class MainWindow : FluentWindow
         TabStrip.Width = Math.Min(contentWidth, stripSpace);
     }
 
+    // ---------- size-move loop ----------
+
+    // A border drag resizes the hosted shell view on every tick. Explorer's
+    // DirectUI relayout costs tens of milliseconds and runs on the UI thread,
+    // so WPF cannot repaint the frame underneath the HwndHost -- the airspace
+    // hole then shows the desktop until the shell paints again. Collapsing the
+    // body for the duration of the loop keeps the HwndHost out of layout (no
+    // per-tick SetWindowPos reaches the shell), leaves the window background,
+    // which WPF paints in a few hundred microseconds, and the shell relayouts
+    // once when the drag ends.
+    private void BeginSizeMove(IntPtr hwnd)
+    {
+        _inSizeMove = true;
+        _shellViewsSuppressed = false;
+        if (GetClientRect(hwnd, out var client))
+        {
+            _sizeMoveStartClientWidth = client.Right - client.Left;
+            _sizeMoveStartClientHeight = client.Bottom - client.Top;
+        }
+        _sizeMoveWatchdog.Start();
+    }
+
+    private void SuppressShellViews()
+    {
+        if (_shellViewsSuppressed) return;
+        _shellViewsSuppressed = true;
+        ViewContainer.Visibility = Visibility.Collapsed;
+    }
+
+    private void EndSizeMove()
+    {
+        _inSizeMove = false;
+        _sizeMoveWatchdog.Stop();
+        if (!_shellViewsSuppressed) return;
+        _shellViewsSuppressed = false;
+        ViewContainer.Visibility = Visibility.Visible;
+    }
+
+    // A drag that is interrupted (the shell swallowed the mouse-up, a modal
+    // dialog stole the loop) never delivers WM_EXITSIZEMOVE. The left button
+    // being up is the reliable signal that the loop is over.
+    private void HandleSizeMoveWatchdog()
+    {
+        if (!_inSizeMove) return;
+        if (IsLeftButtonDown()) return;
+        EndSizeMove();
+    }
+
+    private static bool IsLeftButtonDown()
+        => (GetAsyncKeyState(VkLeftButton) & 0x8000) != 0;
+
+    private const int VkLeftButton = 0x01;
+
+    [DllImport("user32.dll")]
+    private static extern short GetAsyncKeyState(int virtualKey);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect32
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetClientRect(IntPtr hwnd, out Rect32 rect);
+
     private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         const int WM_KEYDOWN = 0x0100;
-        if (msg != WM_KEYDOWN || _isClosing) return IntPtr.Zero;
+        const int WM_SIZE = 0x0005;
+        const int WM_ENTERSIZEMOVE = 0x0231;
+        const int WM_EXITSIZEMOVE = 0x0232;
 
-        const int VK_T = 0x54;
-        const int VK_W = 0x57;
-        const int VK_H = 0x48;
-        var key = (int)wParam;
-        var control = Keyboard.IsKeyDown(Key.LeftCtrl) || Keyboard.IsKeyDown(Key.RightCtrl);
-        var shift = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+        if (_isClosing) return IntPtr.Zero;
 
-        if (!control || key != VK_T && key != VK_W && key != VK_H) return IntPtr.Zero;
-
-        if (key == VK_T && shift)
+        if (msg == WM_ENTERSIZEMOVE)
         {
-            ReopenClosedTab();
-            handled = true;
+            BeginSizeMove(hwnd);
             return IntPtr.Zero;
         }
 
-        if (key == VK_T)
+        if (msg == WM_SIZE)
         {
-            AddTab(AppSettings.Current.NewTabPath);
-            handled = true;
+            // lParam carries the new client size; a drag that only moves the
+            // window keeps it unchanged, so the body is hidden on the first
+            // real resize tick, before WPF lays out the shell host.
+            if (_inSizeMove)
+            {
+                if (!_shellViewsSuppressed)
+                {
+                    var width = (int)(lParam.ToInt64() & 0xFFFF);
+                    var height = (int)((lParam.ToInt64() >> 16) & 0xFFFF);
+                    if (width != _sizeMoveStartClientWidth || height != _sizeMoveStartClientHeight)
+                    {
+                        SuppressShellViews();
+                    }
+                }
+            }
+            else if (_shellViewsSuppressed)
+            {
+                // A size change outside the loop means the exit message was
+                // lost (drag interrupted by the shell). Never leave the body
+                // collapsed.
+                EndSizeMove();
+            }
+            return IntPtr.Zero;
         }
-        else if (key == VK_H)
+
+        if (msg == WM_EXITSIZEMOVE)
         {
-            ShowHistoryPage();
-            handled = true;
+            EndSizeMove();
+            return IntPtr.Zero;
         }
-        else if (key == VK_W && _active is { } tab)
-        {
-            CloseTab(tab);
-            handled = true;
-        }
+
+        if (msg != WM_KEYDOWN) return IntPtr.Zero;
+
+        // GetKeyState, not Keyboard.Modifiers: this runs before WPF's input
+        // system has processed the key, so the WPF state can still be stale.
+        var control = (GetKeyState(VkControlKey) & 0x8000) != 0;
+        if (!control) return IntPtr.Zero;
+        var shift = (GetKeyState(VkShiftKey) & 0x8000) != 0;
+        if (HandleWindowShortcut(ToKey((int)wParam), shift)) handled = true;
         return IntPtr.Zero;
     }
 
@@ -493,6 +591,9 @@ public partial class MainWindow : FluentWindow
         // Alt+Left / Alt+Right typed inside the native shell view; the WPF
         // key path cannot see those because the HwndHost owns the focus.
         tab.TabSwitchRequested += CycleTabBy;
+        // Ctrl shortcuts have the same problem, one step worse: the shell also
+        // binds most of the same chords, so BrowserTab reports and swallows.
+        tab.ShellShortcutRequested += HandleShellShortcut;
         _tabs.Add(tab);
         return tab;
     }
@@ -2437,51 +2538,82 @@ public partial class MainWindow : FluentWindow
         }
 
         if (Keyboard.Modifiers != ModifierKeys.Control) return;
-        if (e.Key == Key.F5 || e.Key == Key.R)
+        e.Handled = HandleWindowShortcut(e.Key, shift);
+    }
+
+    /// <summary>
+    /// The Ctrl shortcuts the window owns. Both the WPF key path and the
+    /// native shell view's subclass route here: with focus inside the shell
+    /// view WM_KEYDOWN never reaches this window, so BrowserTab reports the
+    /// virtual key instead of the WPF Key. Returns whether the key was used.
+    /// </summary>
+    private bool HandleWindowShortcut(Key key, bool shift)
+    {
+        switch (key)
         {
-            if (_active is { } activeTab && activeTab.CurrentLocation is { } location)
-            {
-                RefreshTab(activeTab, location);
-            }
-            e.Handled = true;
-        }
-        else if (e.Key == Key.L)
-        {
-            ShowBreadcrumb(shouldEdit: true);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.F)
-        {
-            SearchBox.Focus();
-            SearchBox.SelectAll();
-            e.Handled = true;
-        }
-        else if (e.Key == Key.S)
-        {
-            SaveWorkspace_Click(sender, e);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.O)
-        {
-            OpenWorkspace_Click(sender, e);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.T)
-        {
-            AddTab(AppSettings.Current.NewTabPath);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.W && _active is { } tab)
-        {
-            CloseTab(tab);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.H)
-        {
-            ShowHistoryPage();
-            e.Handled = true;
+            case Key.T when shift:
+                ReopenClosedTab();
+                return true;
+            case Key.T:
+                AddTab(AppSettings.Current.NewTabPath);
+                return true;
+            case Key.W when _active is { } tab:
+                CloseTab(tab);
+                return true;
+            case Key.H:
+                ShowHistoryPage();
+                return true;
+            case Key.F:
+                SearchBox.Focus();
+                SearchBox.SelectAll();
+                return true;
+            case Key.L:
+                ShowBreadcrumb(shouldEdit: true);
+                return true;
+            case Key.S:
+                SaveWorkspace_Click(this, new RoutedEventArgs());
+                return true;
+            case Key.O:
+                OpenWorkspace_Click(this, new RoutedEventArgs());
+                return true;
+            case Key.F5:
+            case Key.R:
+                if (_active is { } activeTab && activeTab.CurrentLocation is { } location)
+                {
+                    RefreshTab(activeTab, location);
+                }
+                return true;
+            default:
+                return false;
         }
     }
+
+    /// <summary>
+    /// Entry point for shortcuts typed inside the native shell view. Only the
+    /// chords BrowserTab decided the window owns get here, so no extra
+    /// filtering is needed.
+    /// </summary>
+    private void HandleShellShortcut(int virtualKey, bool shift)
+        => HandleWindowShortcut(ToKey(virtualKey), shift);
+
+    /// <summary>
+    /// Maps the virtual keys the shortcuts use onto WPF's Key enum. Only the
+    /// keys listed here can arrive from the shell subclass or the window hook,
+    /// so the letter range plus F5 covers every case.
+    /// </summary>
+    private static Key ToKey(int virtualKey) => virtualKey switch
+    {
+        VkF5 => Key.F5,
+        >= 'A' and <= 'Z' => (Key)((int)Key.A + (virtualKey - 'A')),
+        _ => Key.None,
+    };
+
+    private const int VkF5 = 0x74;
+    private const int VkControlKey = 0x11;
+    private const int VkShiftKey = 0x10;
+
+    [DllImport("user32.dll")]
+    private static extern short GetKeyState(int virtualKey);
 
     // Chrome-style access history: navigation events are coalesced so fast
     // programmatic navigation and duplicate refreshes do not flood the list.
