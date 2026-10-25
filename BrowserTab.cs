@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Forms.Integration;
+using System.Windows.Threading;
 using Microsoft.WindowsAPICodePack.Controls;
 using Microsoft.WindowsAPICodePack.Controls.WindowsForms;
 using Microsoft.WindowsAPICodePack.Shell;
@@ -59,6 +60,14 @@ public sealed class BrowserTab : INotifyPropertyChanged
     public event EventHandler? NavigationStateChanged;
 
     /// <summary>
+    /// 该标签第一次真正拿到非零视图项时触发一次。NavigationComplete 只代表
+    /// 地址切换完成，此时 DirectUI 列表还没填充；用它收起等待提示会让用户
+    /// 只剩系统那句"正在处理…"。这里以 ItemsChanged 且项数 &gt; 0 为准。
+    /// 每个标签每个导航周期只触发一次，滚动/刷新不会重复触发。
+    /// </summary>
+    public event EventHandler? ItemsPresented;
+
+    /// <summary>
     /// Alt+Left / Alt+Right typed while the native shell view owns the focus.
     /// The argument is -1 for the previous tab and +1 for the next one; the
     /// window turns it into an actual tab switch.
@@ -109,6 +118,11 @@ public sealed class BrowserTab : INotifyPropertyChanged
     private string? _paneRebuildTargetPath;
     private bool _paneRebuildReturnStarted;
     private bool _isNavigating;
+    /// <summary>本轮导航是否已经报过"拿到非零项"，避免滚动/刷新重复触发。</summary>
+    private bool _itemsPresented;
+    /// <summary>ItemsChanged 脏标志：大目录下事件是风暴（实测 4.8 万次），
+    /// 只在 UI 周期合并处理一次，不能逐次执行。</summary>
+    private bool _itemsChangedPending;
     private bool _historyNavigationPending;
     private NavigationLogDirection _pendingHistoryDirection;
 
@@ -237,6 +251,8 @@ public sealed class BrowserTab : INotifyPropertyChanged
         browser.NavigationPending += (_, _) =>
         {
             _isNavigating = true;
+            // 新一轮导航：重置"已报过项"的标志，否则第二次进目录时不会通知。
+            _itemsPresented = false;
             NavigationStateChanged?.Invoke(this, EventArgs.Empty);
         };
         browser.NavigationFailed += (_, _) =>
@@ -254,7 +270,39 @@ public sealed class BrowserTab : INotifyPropertyChanged
         };
         browser.HandleDestroyed += (_, _) => ReleaseShellSubclasses();
         browser.SelectionChanged += (_, _) => SelectionStateChanged?.Invoke(this, EventArgs.Empty);
-        browser.ItemsChanged += (_, _) => SelectionStateChanged?.Invoke(this, EventArgs.Empty);
+        // ItemsChanged 在大目录下是"事件风暴"：实测 WinSxS(2.4万项) 会在 50ms 内
+        // 触发约 4.8 万次。每来一次就刷状态栏 + 同步菜单勾选，会把 UI 线程占满，
+        // shell 拿不到消息泵，表现就是"正在加载"永不结束。
+        // 所以这里只置一个脏标志，由 UI 周期合并处理，绝不逐次执行。
+        browser.ItemsChanged += (_, _) =>
+        {
+            if (_itemsChangedPending) return;
+            _itemsChangedPending = true;
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                if (!_itemsChangedPending) return;
+                _itemsChangedPending = false;
+                SelectionStateChanged?.Invoke(this, EventArgs.Empty);
+            }));
+        };
+        // 真正的"枚举完成"信号：大目录下只触发一次（WinSxS 实测 3417ms）。
+        // 项数只在这里读一次，避免在事件风暴里实例化整个项集合。
+        browser.ViewEnumerationComplete += (_, _) =>
+        {
+            if (_itemsPresented) return;
+            try
+            {
+                if (browser.Items is { Count: > 0 })
+                {
+                    _itemsPresented = true;
+                    ItemsPresented?.Invoke(this, EventArgs.Empty);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppStorage.Log($"ViewEnumerationComplete read failed for {_currentPath}: {ex.GetType().Name}");
+            }
+        };
 
         // Navigate once the host is loaded and its HWND exists;
         // navigating before that can be dropped by the control.

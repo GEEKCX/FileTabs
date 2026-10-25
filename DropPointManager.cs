@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Forms;
 using Application = System.Windows.Application;
 using NotifyIcon = System.Windows.Forms.NotifyIcon;
+using WpfWindow = System.Windows.Window;
 
 namespace FileTabs;
 
@@ -28,6 +29,8 @@ public sealed class DropPointManager : IDisposable
     private GlobalHotKey? _hotKey;
     private Window? _mainWindow;
     private bool _disposed;
+    // 静默启动钉住的托盘：不随拖放中转开关一起移除。
+    private bool _trayPinned;
 
     public void Start(Window mainWindow)
     {
@@ -50,18 +53,54 @@ public sealed class DropPointManager : IDisposable
         {
             UnregisterHotKey();
             CloseAllPads();
-            if (_tray is { } tray)
+            // 静默启动时托盘是找回窗口的唯一入口，不能因为关掉拖放中转就消失。
+            if (!_trayPinned)
             {
-                tray.Visible = false;
-                tray.ContextMenuStrip = null;
-                tray.Dispose();
-                _tray = null;
+                RemoveTray();
             }
-            _trayMenu?.Dispose();
-            _trayMenu = null;
-            _trayIcon?.Dispose();
-            _trayIcon = null;
         }
+        RebuildTrayMenu();
+    }
+
+    /// <summary>
+    /// 创建常驻托盘：无论是否静默启动、是否开启拖放中转都要有，
+    /// 否则窗口关掉后用户既找不回程序也退不出去。只创建一次。
+    /// </summary>
+    public void EnsurePersistentTray()
+    {
+        if (_disposed) return;
+        _mainWindow ??= Application.Current?.MainWindow;
+        _trayPinned = true;
+        EnsureTray();
+    }
+
+    /// <summary>
+    /// 托盘「退出」：先让窗口走一次正常的关闭流程，把会话和窗口位置存下来。
+    /// Application.Shutdown() 不触发 Window.Closing，单用它会把这两项丢掉。
+    /// </summary>
+    private void ExitApplication()
+    {
+        if (_mainWindow is WpfWindow window)
+        {
+            window.Close();
+            return;
+        }
+        Application.Current?.Shutdown();
+    }
+
+    private void RemoveTray()
+    {
+        if (_tray is { } tray)
+        {
+            tray.Visible = false;
+            tray.ContextMenuStrip = null;
+            tray.Dispose();
+            _tray = null;
+        }
+        _trayMenu?.Dispose();
+        _trayMenu = null;
+        _trayIcon?.Dispose();
+        _trayIcon = null;
     }
 
     private void EnsureTray()
@@ -72,26 +111,56 @@ public sealed class DropPointManager : IDisposable
         _tray = new NotifyIcon
         {
             Icon = _trayIcon,
-            Text = "FileTabs 拖放中转",
+            // 未开拖放中转时托盘只负责找回主窗口，文案不能还写“拖放中转”。
+            Text = AppSettings.Current.DropPointEnabled ? "FileTabs 拖放中转" : "FileTabs",
             Visible = true,
             ContextMenuStrip = _trayMenu,
         };
         _tray.MouseClick += (_, args) =>
         {
-            // Clicking the tray icon follows the cursor's monitor, matching
-            // the interaction users expect from the hot-key path.
-            if (args.Button == System.Windows.Forms.MouseButtons.Left) ShowPadAtCursor();
+            // 静默启动后窗口可能从未显示过，托盘就是唯一的找回入口：
+            // 左键先确保主窗口可见；开了拖放中转再按光标弹托盘点。
+            if (args.Button != System.Windows.Forms.MouseButtons.Left) return;
+            ShowMainWindow();
+            if (AppSettings.Current.DropPointEnabled) ShowPadAtCursor();
         };
+    }
+
+    /// <summary>把主窗口从隐藏状态叫回来（静默启动后托盘/热键路径共用）。</summary>
+    private void ShowMainWindow()
+    {
+        if (_mainWindow is not { } window) return;
+        if (!window.IsVisible) window.Show();
+        if (window.WindowState == System.Windows.WindowState.Minimized)
+        {
+            window.WindowState = System.Windows.WindowState.Normal;
+        }
+        window.Activate();
     }
 
     private ContextMenuStrip BuildTrayMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("新建托盘点", null, (_, _) => ShowPadAtCursor());
+        menu.Items.Add("打开主窗口", null, (_, _) => ShowMainWindow());
+        if (AppSettings.Current.DropPointEnabled)
+        {
+            menu.Items.Add("新建托盘点", null, (_, _) => ShowPadAtCursor());
+        }
         menu.Items.Add("设置…", null, (_, _) => OpenSettings());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("退出 FileTabs", null, (_, _) => Application.Current?.Shutdown());
+        menu.Items.Add("退出 FileTabs", null, (_, _) => ExitApplication());
         return menu;
+    }
+
+    /// <summary>菜单项依赖拖放中转开关，开关变化后重建。</summary>
+    private void RebuildTrayMenu()
+    {
+        if (_tray is null) return;
+        var old = _trayMenu;
+        _trayMenu = BuildTrayMenu();
+        _tray.ContextMenuStrip = _trayMenu;
+        _tray.Text = AppSettings.Current.DropPointEnabled ? "FileTabs 拖放中转" : "FileTabs";
+        old?.Dispose();
     }
 
     private void OpenSettings()

@@ -36,13 +36,16 @@
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="Padding" Value="0"/>
-            <Setter Property="Focusable" Value="False"/>
+            <!-- 键盘可达：图标按钮原本 Focusable=False，整条 Tab 序列里到不了
+                 后退/刷新/复制路径这些关键按钮，键盘用户完全无法使用工具栏。 -->
+            <Setter Property="Focusable" Value="True"/>
             <Setter Property="HorizontalContentAlignment" Value="Center"/>
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="bg" Background="Transparent" CornerRadius="4">
+                        <Border x:Name="bg" Background="Transparent" CornerRadius="4"
+                                BorderThickness="1" BorderBrush="Transparent">
                             <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                               VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                         </Border>
@@ -54,6 +57,12 @@
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="bg" Property="Background"
                                         Value="{DynamicResource SubtleFillColorTertiaryBrush}"/>
+                            </Trigger>
+                            <!-- 焦点视觉：原模板没有任何焦点反馈，只放开 Tab 用户也看不出
+                                 自己停在哪。用边框而不是底色，和 hover 不互相覆盖。 -->
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="bg" Property="BorderBrush"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -67,7 +76,6 @@
             <Setter Property="Height" Value="30"/>
             <Setter Property="Margin" Value="0,0,2,0"/>
             <Setter Property="Foreground" Value="{DynamicResource FileTabs.ChromeMutedTextBrush}"/>
-            <Setter Property="IsTabStop" Value="False"/>
         </Style>
 
         <!-- 工具栏分组线：宽度和间距固定，避免不同按钮组看起来像随机换行。 -->

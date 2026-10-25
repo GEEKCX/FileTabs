@@ -35,12 +35,35 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        _singleInstanceMutex = new Mutex(true, MutexName, out var isNewInstance);
+        // Single-instance election. createdNew alone is not enough: after the
+        // first instance is killed, the named mutex can linger unnamed-owner-
+        // less for a moment, so createdNew is false while nobody actually
+        // holds it. WaitOne (with no wait) is the real "is someone holding it"
+        // question; AbandonedMutexException means the previous owner died
+        // without releasing, which means we take over.
+        _singleInstanceMutex = new Mutex(initiallyOwned: false, MutexName);
+        bool isNewInstance;
+        try
+        {
+            isNewInstance = _singleInstanceMutex.WaitOne(0);
+        }
+        catch (AbandonedMutexException)
+        {
+            // The holder died without releasing; the mutex is ours now.
+            isNewInstance = true;
+        }
         _ownsSingleInstanceMutex = isNewInstance;
         if (!isNewInstance)
         {
             // Ask the running instance to come to the front, open the path
             // passed on our command line, then leave.
+            //
+            // This instance exists only to notify. Nothing in here may throw:
+            // an unhandled exception would surface as 0xe0434352 and the user
+            // would see a crash dialog for what should be a silent no-op.
+            // UnauthorizedAccessException is the one that actually bites: when
+            // the running instance is exiting, Local\ named objects can still
+            // exist while their ACL denies access.
             try
             {
                 _restoreSignal = EventWaitHandle.OpenExisting(RestoreEventName);
@@ -49,6 +72,15 @@ public partial class App : Application
             catch (WaitHandleCannotBeOpenedException)
             {
                 // The other process may be closing; launching again is enough.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // The running instance's objects are being torn down and the
+                // handle cannot be opened. Nothing to recover: exit quietly.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Opened, then disposed by the owner mid-set.
             }
             TrySendPathToRunningInstance(e.Args);
             Shutdown();
@@ -65,6 +97,9 @@ public partial class App : Application
                 {
                     if (Current?.MainWindow is { } window)
                     {
+                        // 静默启动的实例从未显示过，只 Activate 会激活一个
+                        // 不可见的窗口。
+                        if (!window.IsVisible) window.Show();
                         if (window.WindowState == WindowState.Minimized)
                         {
                             window.WindowState = WindowState.Normal;
@@ -86,8 +121,26 @@ public partial class App : Application
         // save its own empty tab list over it on exit.
         var main = new MainWindow();
         this.MainWindow = main;
-        main.Show();
-        StartupTiming.Mark("window-show-returned");
+        // 登录自启或显式 --silent 启动都留在后台：窗口照常构建、会话照常恢复，
+        // 但不显示，直到有人要它（打开文件夹、Win+E 被接管、或再次启动 exe）。
+        if (!IsSilentStartup(e.Args))
+        {
+            main.Show();
+            StartupTiming.Mark("window-show-returned");
+        }
+        else
+        {
+            // 静默启动仍要窗口句柄：DropPoint 的全局热键走
+            // PresentationSource.FromVisual，没有 HWND 就静默失败；托盘和二次
+            // 启动的激活也需要它。Show 后立即隐藏，句柄留下、窗口不出现。
+            main.ShowActivated = false;
+            main.Show();
+            main.Hide();
+        }
+
+        // 托盘常驻：静默启动和手动启动都要有，否则窗口关掉后既找不回程序
+        // 也退不出去。拖放中转只是它的一个附加功能。
+        DropPoints.EnsurePersistentTray();
 
         if (AppSettings.Current.DropPointEnabled)
         {
@@ -132,6 +185,28 @@ public partial class App : Application
             AppStorage.Log("Unobserved task exception: " + args.Exception);
             args.SetObserved();
         };
+
+        MigrateLegacyAutostart();
+    }
+
+    /// <summary>本次启动是否要求后台静默起来。</summary>
+    private static bool IsSilentStartup(string[] args)
+    {
+        foreach (var arg in args)
+        {
+            if (string.Equals(arg, StartupRegistration.SilentArgument, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 静默启动之前写的自启项没有参数，登录时仍会弹窗。就地改写一次。
+    /// </summary>
+    private static void MigrateLegacyAutostart()
+    {
+        if (!StartupRegistration.IsLegacyCommand()) return;
+        StartupRegistration.Enable();
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -176,9 +251,12 @@ public partial class App : Application
             using var writer = new StreamWriter(client) { AutoFlush = true };
             writer.WriteLine(path);
         }
-        catch (Exception ex) when (ex is IOException or TimeoutException or UnauthorizedAccessException)
+        catch (Exception)
         {
-            // Best-effort: if the pipe isn't up, the second instance just exits.
+            // Best-effort: this instance only notifies. If the pipe is not up,
+            // is closing, or access is denied, exiting quietly is correct —
+            // letting anything escape would crash the short-lived process for
+            // no user-visible benefit.
         }
     }
 

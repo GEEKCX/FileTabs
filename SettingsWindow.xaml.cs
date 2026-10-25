@@ -14,6 +14,13 @@ namespace FileTabs;
 /// </summary>
 public partial class SettingsWindow : Window
 {
+    /// <summary>
+    /// 打开设置时的自启状态。只有用户真的改动了这个复选框才写注册表；
+    /// 否则“旧值（无参数）显示为已勾选 → 直接保存”会把它悄悄改写成
+    /// --silent，等于用户没要求就改了自启行为。
+    /// </summary>
+    private readonly bool _startWithWindowsOnOpen;
+
     public SettingsWindow()
     {
         InitializeComponent();
@@ -25,7 +32,8 @@ public partial class SettingsWindow : Window
             _ => 2,
         };
         NewTabPathBox.Text = AppSettings.Current.NewTabPath;
-        StartWithWindowsCheckBox.IsChecked = StartupRegistration.IsEnabled();
+        _startWithWindowsOnOpen = StartupRegistration.IsEnabled();
+        StartWithWindowsCheckBox.IsChecked = _startWithWindowsOnOpen;
         RestoreLastSessionCheckBox.IsChecked = AppSettings.Current.RestoreLastSession;
         ShowPreviewPaneCheckBox.IsChecked = AppSettings.Current.ShowPreviewPane;
         ShowNativeCommandBarCheckBox.IsChecked = AppSettings.Current.ShowNativeCommandBar;
@@ -130,13 +138,16 @@ public partial class SettingsWindow : Window
             (TerminalCombo.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Tag as string
             ?? nameof(TerminalKind.WindowsTerminal);
         var startWithWindows = StartWithWindowsCheckBox.IsChecked == true;
-        if (startWithWindows)
+        if (startWithWindows != _startWithWindowsOnOpen)
         {
-            StartupRegistration.Enable();
-        }
-        else
-        {
-            StartupRegistration.Disable();
+            if (startWithWindows)
+            {
+                StartupRegistration.Enable();
+            }
+            else
+            {
+                StartupRegistration.Disable();
+            }
         }
         var wantRedirect = RedirectFoldersCheckBox.IsChecked == true;
         if (wantRedirect && !NativeRedirect.IsInstalled())
