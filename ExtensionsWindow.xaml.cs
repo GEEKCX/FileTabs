@@ -20,8 +20,6 @@ public partial class ExtensionsWindow : Window
     /// <summary>功能 Id → 已创建页面，切换功能时保留各自状态。</summary>
     private readonly Dictionary<string, FrameworkElement> _pages = new();
 
-    private bool _isInitializing = true;
-
     public ExtensionsWindow(string? initialFolder)
     {
         InitialFolder = initialFolder;
@@ -37,7 +35,6 @@ public partial class ExtensionsWindow : Window
         {
             FeatureList.SelectedIndex = 0;
         }
-        _isInitializing = false;
     }
 
     private void FeatureList_SelectionChanged(object sender, SelectionChangedEventArgs e)
