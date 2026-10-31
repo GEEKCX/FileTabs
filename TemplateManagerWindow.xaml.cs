@@ -242,7 +242,171 @@ public partial class TemplateManagerWindow : Window
     private void UpdateButtons()
     {
         DeleteTemplateButton.IsEnabled = _editingOriginal is not null;
+        ExportTemplateButton.IsEnabled = _editingOriginal is not null;
     }
+
+    #region Sprint 3：导入 / 导出 / 从目录反向生成
+
+    /// <summary>导出当前选中的模板为 .json 文件（单个对象结构）。</summary>
+    private void ExportTemplate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_editingOriginal is null) return;
+
+        // 默认文件名用模板名；文件名里的非法字符换成下划线。
+        var safeName = string.Join("_",
+            _editingOriginal.Name.Split(Path.GetInvalidFileNameChars(),
+                StringSplitOptions.RemoveEmptyEntries));
+        if (safeName.Length == 0) safeName = "模板";
+        var defaultName = $"{safeName}-1.2.0.json";
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出目录模板",
+            FileName = defaultName,
+            Filter = "模板文件 (*.json)|*.json|所有文件 (*.*)|*.*",
+            DefaultExt = ".json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            File.WriteAllText(
+                dialog.FileName,
+                FolderTemplateService.SerializeTemplates(new[] { CloneTemplate(_editingOriginal) }),
+                new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or ArgumentException or NotSupportedException)
+        {
+            MessageBox.Show(this, $"导出失败：{ex.Message}", "导出目录模板",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        TemplateStatusText.Text = $"已导出到 {Path.GetFileName(dialog.FileName)}";
+    }
+
+    /// <summary>从 .json 文件导入模板；重名自动加" (导入)"后缀，绝不覆盖现有模板。</summary>
+    private void ImportTemplates_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "导入目录模板",
+            Filter = "模板文件 (*.json)|*.json|所有文件 (*.*)|*.*",
+            DefaultExt = ".json",
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        List<FolderTemplate> imported;
+        try
+        {
+            imported = FolderTemplateService.ParseTemplateJson(
+                File.ReadAllText(dialog.FileName));
+        }
+        catch (Exception ex) when (ex is ArgumentException
+            or System.Text.Json.JsonException or IOException
+            or UnauthorizedAccessException or NotSupportedException)
+        {
+            // 损坏/非法文件：友好提示，不写入任何数据。
+            MessageBox.Show(this, $"无法导入该文件：{ex.Message}", "导入目录模板",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // 重名检测：追加" (导入)"，仍冲突则加序号，全部生成唯一名称。
+        var takenNames = new HashSet<string>(
+            _templates.Select(template => template.Name),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var template in imported)
+        {
+            template.Name = FolderTemplateService.MakeUniqueImportName(
+                template.Name.Trim(), takenNames);
+            takenNames.Add(template.Name);
+        }
+
+        var candidate = _templates.Select(CloneTemplate).ToList();
+        candidate.AddRange(imported.Select(CloneTemplate));
+        if (!AppStorage.SaveFolderTemplates(candidate))
+        {
+            MessageBox.Show(this, "模板保存失败，请检查数据目录权限。", "导入失败",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        _templates = candidate;
+        _isLoading = true;
+        TemplateList.ItemsSource = null;
+        TemplateList.ItemsSource = _templates;
+        TemplateList.SelectedItem = imported[0];
+        _isLoading = false;
+        LoadEditor(imported[0], imported[0]);
+        TemplateStatusText.Text =
+            $"已导入 {imported.Count} 个模板" +
+            (imported.Count == 1 ? $"，名称：{imported[0].Name}" : "。");
+    }
+
+    /// <summary>
+    /// 从现有目录反向生成模板：扫描目录树 → 相对路径列表预填编辑器。
+    /// 直接落在编辑器里（不落盘），用户改完自己点"保存模板"。
+    /// </summary>
+    private void GenerateFromFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ConfirmDiscardChanges()) return;
+
+        using var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            ShowNewFolderButton = false,
+            UseDescriptionForTitle = true,
+            Description = "选择要反向生成模板的文件夹",
+        };
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+
+        FolderScanResult scan;
+        try
+        {
+            scan = FolderTemplateService.ScanFolderTree(dialog.SelectedPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException
+            or IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, ex.Message, "从目录生成模板",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        if (scan.RelativePaths.Count == 0)
+        {
+            MessageBox.Show(this, "该文件夹下没有可用的子目录（已跳过隐藏目录和常见工具目录）。",
+                "从目录生成模板", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var sourceName = Path.GetFileName(
+            Path.TrimEndingDirectorySeparator(dialog.SelectedPath));
+        _isLoading = true;
+        TemplateList.SelectedItem = null;
+        LoadEditor(new FolderTemplate
+        {
+            Name = sourceName,
+            Description = $"从 {dialog.SelectedPath} 反向生成" +
+                          (scan.Truncated ? $"（{FolderTemplateService.DescribeScanTruncation(scan)}）" : ""),
+            InputLabel = "名称/编号",
+            RootFolder = "{名称}",
+            Folders = scan.RelativePaths,
+        }, null);
+        _isLoading = false;
+        NameBox.Focus();
+
+        TemplateStatusText.Text =
+            $"已生成 {scan.RelativePaths.Count} 条目录路径，确认后请点“保存模板”。" +
+            (scan.Truncated
+                ? $" {FolderTemplateService.DescribeScanTruncation(scan)}"
+                : "");
+        _isDirty = true; // 生成的内容也是未保存状态，切换时同样提示
+        UpdateStatus();
+    }
+
+    #endregion
 
     private void UpdateStatus()
     {
