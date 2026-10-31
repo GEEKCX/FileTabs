@@ -249,6 +249,42 @@ public static class AppStorage
         }
     }
 
+    public static string FolderTemplatePath =>
+        Path.Combine(DataDirectory, "folder-templates.json");
+
+    public static List<FolderTemplate> LoadFolderTemplates()
+    {
+        var file = FolderTemplatePath;
+        if (!File.Exists(file)) return new List<FolderTemplate>();
+        try
+        {
+            return JsonSerializer.Deserialize<List<FolderTemplate>>(
+                       File.ReadAllText(file), JsonOptions)
+                   ?? new List<FolderTemplate>();
+        }
+        catch (JsonException)
+        {
+            ArchiveCorruptFile(file);
+            Log("folder-templates.json is corrupt; ignored.");
+            return new List<FolderTemplate>();
+        }
+    }
+
+    public static bool SaveFolderTemplates(IEnumerable<FolderTemplate> templates)
+    {
+        try
+        {
+            WriteFileAtomically(FolderTemplatePath,
+                JsonSerializer.Serialize(templates, JsonOptions));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"SaveFolderTemplates failed: {ex.Message}");
+            return false;
+        }
+    }
+
     public static List<RecentLocation> LoadRecentLocations()
     {
         var file = Path.Combine(DataDirectory, "history.json");

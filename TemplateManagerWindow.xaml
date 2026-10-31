@@ -1,0 +1,185 @@
+<Window x:Class="FileTabs.TemplateManagerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="FileTabs 模板管理器" Width="900" Height="700"
+        MinWidth="760" MinHeight="560"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+        FontFamily="{x:Static SystemFonts.MessageFontFamily}"
+        FontSize="{x:Static SystemFonts.MessageFontSize}">
+    <Window.Resources>
+        <Style x:Key="ManagerCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource FileTabs.SettingsCardBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource FileTabs.SettingsCardBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="16"/>
+        </Style>
+
+        <Style x:Key="ManagerHint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+
+        <Style x:Key="ManagerFieldLabel" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,10,0,4"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="20,16,20,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock Text="模板管理器" FontSize="20" FontWeight="SemiBold"/>
+            <TextBlock Text="目录模板只保存在本机，创建目录时不会删除或覆盖已有文件。"
+                       Style="{StaticResource ManagerHint}" Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,18,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Style="{StaticResource ManagerCard}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="我的模板" FontSize="15" FontWeight="SemiBold"/>
+                    <ListBox x:Name="TemplateList" Grid.Row="1"
+                             Margin="0,12,0,12"
+                             DisplayMemberPath="Name"
+                             SelectionChanged="TemplateList_SelectionChanged"/>
+                    <StackPanel Grid.Row="2" Orientation="Horizontal">
+                        <Button Content="新建" Width="72" Click="NewTemplate_Click"/>
+                        <Button x:Name="DeleteTemplateButton" Content="删除" Width="72"
+                                Margin="8,0,0,0" Click="DeleteTemplate_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2" Style="{StaticResource ManagerCard}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel>
+                        <TextBlock Text="模板名称" Style="{StaticResource ManagerFieldLabel}"/>
+                        <TextBox x:Name="NameBox" Height="32"
+                                 TextChanged="EditorTextChanged"/>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="16"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="输入标签" Style="{StaticResource ManagerFieldLabel}"/>
+                                <TextBox x:Name="InputLabelBox" Height="32"
+                                         TextChanged="EditorTextChanged"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="说明（可选）" Style="{StaticResource ManagerFieldLabel}"/>
+                                <TextBox x:Name="DescriptionBox" Height="32"
+                                         TextChanged="EditorTextChanged"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <TextBlock Text="根目录规则" Style="{StaticResource ManagerFieldLabel}"/>
+                        <TextBox x:Name="RootFolderBox" Height="32"
+                                 GotKeyboardFocus="VariableTarget_GotKeyboardFocus"
+                                 TextChanged="EditorTextChanged"/>
+                        <TextBlock Text="例如：{名称}、{名称}_{日期}。创建时会替换成输入值。"
+                                   Style="{StaticResource ManagerHint}" Margin="0,4,0,0"/>
+
+                        <Grid Margin="0,10,0,0">
+                            <TextBlock Text="文件夹路径（一行一个，相对根目录）"
+                                       Style="{StaticResource ManagerFieldLabel}" Margin="0"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Content="插入 {名称}" Tag="{}{名称}"
+                                        Padding="8,0" Click="InsertVariable_Click"/>
+                                <Button Content="插入 {日期}" Tag="{}{日期}"
+                                        Margin="6,0,0,0" Padding="8,0" Click="InsertVariable_Click"/>
+                                <Button Content="插入 {月份}" Tag="{}{月份}"
+                                        Margin="6,0,0,0" Padding="8,0" Click="InsertVariable_Click"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBox x:Name="FoldersBox" Height="120"
+                                 AcceptsReturn="True"
+                                 TextWrapping="NoWrap"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas"
+                                 GotKeyboardFocus="VariableTarget_GotKeyboardFocus"
+                                 TextChanged="EditorTextChanged"/>
+                    </StackPanel>
+
+                    <Border Grid.Row="1" Margin="0,12,0,0"
+                            Background="{DynamicResource ControlFillColorDefaultBrush}"
+                            BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                            BorderThickness="1" CornerRadius="6" Padding="10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <DockPanel>
+                                <TextBlock Text="示例预览" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="PreviewStatusText"
+                                           DockPanel.Dock="Right"
+                                           HorizontalAlignment="Right"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                            </DockPanel>
+                            <TreeView x:Name="PreviewTree" Grid.Row="1"
+                                      Margin="0,6,0,0"
+                                      Background="Transparent"
+                                      BorderThickness="0">
+                                <TreeView.ItemTemplate>
+                                    <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                        <StackPanel Orientation="Horizontal" Margin="0,1">
+                                            <ui:SymbolIcon Symbol="Folder24" FontSize="13"
+                                                           Margin="0,0,5,0" Foreground="#D6A536"/>
+                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </HierarchicalDataTemplate>
+                                </TreeView.ItemTemplate>
+                            </TreeView>
+                        </Grid>
+                    </Border>
+
+                    <Grid Grid.Row="2" Margin="0,12,0,0">
+                        <TextBlock x:Name="TemplateStatusText"
+                                   VerticalAlignment="Center"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="CloseTemplateButton" Content="关闭"
+                                    Width="76" Click="Close_Click"/>
+                            <Button x:Name="SaveTemplateButton" Content="保存模板" Width="100"
+                                    Margin="8,0,0,0" IsDefault="True"
+                                    Click="SaveTemplate_Click"/>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

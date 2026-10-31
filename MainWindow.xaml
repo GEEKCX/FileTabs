@@ -404,12 +404,12 @@
                             ToolTip="最近访问 (Ctrl+H)">
                         <ui:SymbolIcon Symbol="History20" FontSize="18"/>
                     </Button>
-                    <ui:Button x:Name="AiButton" Height="30" Appearance="Transparent"
+                    <ui:Button x:Name="ExtensionsButton" Height="30" Appearance="Transparent"
                                Margin="6,0,2,0" Padding="7,0"
-                               Click="AiButton_Click" ToolTip="AI 助手">
+                               Click="ExtensionsButton_Click" ToolTip="扩展">
                         <StackPanel Orientation="Horizontal">
-                            <ui:SymbolIcon Symbol="Sparkle24" FontSize="13" Foreground="#3A7CB8"/>
-                            <TextBlock Text="AI" Margin="3,0,0,0" FontSize="12"
+                            <ui:SymbolIcon Symbol="Apps24" FontSize="13" Foreground="#3A7CB8"/>
+                            <TextBlock Text="扩展" Margin="3,0,0,0" FontSize="12"
                                        Foreground="{DynamicResource FileTabs.ChromeMutedTextBrush}"/>
                         </StackPanel>
                     </ui:Button>
