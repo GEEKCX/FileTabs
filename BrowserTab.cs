@@ -123,6 +123,10 @@ public sealed class BrowserTab : INotifyPropertyChanged
     /// <summary>ItemsChanged 脏标志：大目录下事件是风暴（实测 4.8 万次），
     /// 只在 UI 周期合并处理一次，不能逐次执行。</summary>
     private bool _itemsChangedPending;
+    /// <summary>SelectionChanged 脏标志：框选拖动时 shell 连续触发（一次框选
+    /// 可打几十到几百次），每次都同步刷状态栏+菜单会占满 UI 线程。与
+    /// ItemsChanged 一样合并到 UI 周期处理。</summary>
+    private bool _selectionChangedPending;
     private bool _historyNavigationPending;
     private NavigationLogDirection _pendingHistoryDirection;
 
@@ -269,7 +273,17 @@ public sealed class BrowserTab : INotifyPropertyChanged
             InstallShellSubclassTree();
         };
         browser.HandleDestroyed += (_, _) => ReleaseShellSubclasses();
-        browser.SelectionChanged += (_, _) => SelectionStateChanged?.Invoke(this, EventArgs.Empty);
+        browser.SelectionChanged += (_, _) =>
+        {
+            if (_selectionChangedPending) return;
+            _selectionChangedPending = true;
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                if (!_selectionChangedPending) return;
+                _selectionChangedPending = false;
+                SelectionStateChanged?.Invoke(this, EventArgs.Empty);
+            }));
+        };
         // ItemsChanged 在大目录下是"事件风暴"：实测 WinSxS(2.4万项) 会在 50ms 内
         // 触发约 4.8 万次。每来一次就刷状态栏 + 同步菜单勾选，会把 UI 线程占满，
         // shell 拿不到消息泵，表现就是"正在加载"永不结束。

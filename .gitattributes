@@ -1,0 +1,53 @@
+# Line endings and encoding rules for this repository.
+#
+# Why this file exists:
+#   This machine runs ANSI code page 936 (GBK), and Windows PowerShell 5.1
+#   defaults Get-Content / Set-Content to -Encoding Default, which uses that
+#   code page. Editing a UTF-8 file with Chinese text through those cmdlets
+#   silently turns it into mojibake and writes the damage back. That already
+#   destroyed MainWindow.xaml once and cost an afternoon.
+#
+#   The real guard is check-encoding.ps1 plus the .githooks/pre-commit hook,
+#   which reject any commit containing U+FFFD, GBK mojibake, an odd number of
+#   double quotes in a XAML line, or a UTF-8 BOM. This file handles the
+#   line-ending half.
+#
+# Encoding note:
+#   gitattributes cannot force the editor to write UTF-8. What it can do is
+#   make the repository store a single canonical form, so a wrong encoding
+#   shows up as an obvious diff instead of blending in.
+#
+# Line endings:
+#   The whole tree is CRLF on disk (core.autocrlf=true). Declaring it here
+#   keeps that stable across machines and checkouts.
+# ---------------------------------------------------------------------------
+
+* text=auto eol=crlf
+
+# Source and project files: CRLF, never treated as binary.
+*.xaml        text eol=crlf
+*.cs          text eol=crlf
+*.csproj      text eol=crlf
+*.sln         text eol=crlf
+*.ps1         text eol=crlf
+*.json        text eol=crlf
+*.md          text eol=crlf
+*.yml         text eol=crlf
+*.yaml        text eol=crlf
+.gitattributes text eol=crlf
+.gitignore     text eol=crlf
+
+# Git hooks must keep LF: sh chokes on CRLF in shebang scripts.
+.githooks/*   text eol=lf
+
+# Binary assets: never touch them.
+*.dll   binary
+*.exe   binary
+*.pdb   binary
+*.ico   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.zip   binary
+*.nupkg binary
+*.signature.p7s binary

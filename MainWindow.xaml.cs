@@ -221,9 +221,9 @@ public partial class MainWindow : FluentWindow
 
     public static readonly DependencyProperty TabWidthProperty = DependencyProperty.Register(
         nameof(TabWidth), typeof(double), typeof(MainWindow),
-        new PropertyMetadata(TabMaxWidth));
+        new PropertyMetadata(TabMaxWidth + 2 * TabScoopWidth));
 
-    /// <summary>统一后的单块标签宽度，绑定在标签模板上。</summary>
+    /// <summary>统一后的单块标签宽度，绑定在标签模板上。含左右各 8px 的反向外圆弧落位。</summary>
     public double TabWidth
     {
         get => (double)GetValue(TabWidthProperty);
@@ -261,12 +261,16 @@ public partial class MainWindow : FluentWindow
         if (stripSpace <= 0) return;
 
         var count = Math.Max(1, _tabs.Count);
-        TabWidth = Math.Clamp(
+        var bodyWidth = Math.Clamp(
             (stripSpace - TabStripLeftInset - TabScoopWidth) / count,
             TabMinWidth,
             TabMaxWidth);
 
-        var contentWidth = TabStripLeftInset + (_tabs.Count * TabWidth) + TabScoopWidth;
+        // TabWidth 是标签项目的宽度，比标签体左右各宽 8px 给反向外圆弧留位；
+        // 标签体本身靠项目上的 Margin="8,0" 内缩，所以两块标签体依然紧挨着。
+        TabWidth = bodyWidth + 2 * TabScoopWidth;
+
+        var contentWidth = TabStripLeftInset + (_tabs.Count * bodyWidth) + TabScoopWidth;
         TabStrip.Width = Math.Min(contentWidth, stripSpace);
     }
 
@@ -587,6 +591,7 @@ public partial class MainWindow : FluentWindow
             if (!ReferenceEquals(_active, tab)) return;
             UpdateStatusBar();
             SyncViewMenuChecks();
+            UpdateRenameButton();
         };
         // Alt+Left / Alt+Right typed inside the native shell view; the WPF
         // key path cannot see those because the HwndHost owns the focus.
@@ -847,6 +852,39 @@ public partial class MainWindow : FluentWindow
             (log?.CanNavigateForward ?? false);
         NewFolderButton.IsEnabled = CanModifyCurrentFolder();
         UpdatePasteButton();
+        UpdateRenameButton();
+    }
+
+    /// <summary>
+    /// Rename needs exactly one real file-system item selected; synced on
+    /// navigation and selection changes.
+    /// </summary>
+    private void UpdateRenameButton()
+    {
+        if (_active is { HasCompletedNavigation: true } tab
+            && tab.Browser is { } browser)
+        {
+            try
+            {
+                var count = 0;
+                foreach (var item in browser.SelectedItems)
+                {
+                    if (item is ShellObject shellItem
+                        && Path.IsPathRooted(shellItem.ParsingName))
+                    {
+                        count++;
+                        if (count > 1) break;
+                    }
+                }
+                RenameButton.IsEnabled = count == 1;
+                return;
+            }
+            catch (COMException)
+            {
+                // The shell view is between item collections mid-navigation.
+            }
+        }
+        RenameButton.IsEnabled = false;
     }
 
     private void UpdateBreadcrumbs(string parsingPath, string? shellName = null)
@@ -1424,6 +1462,10 @@ public partial class MainWindow : FluentWindow
         if (MenuBookmark(sender) is not { } b) return;
         _renameTarget = b;
         RenameBox.Text = b.Name;
+        // The toolbar file rename switches the popup to Bottom placement on
+        // the button; reset so the bookmark rename still follows the mouse.
+        RenamePopup.PlacementTarget = null;
+        RenamePopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Mouse;
         RenamePopup.IsOpen = true;
         Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -1445,6 +1487,7 @@ public partial class MainWindow : FluentWindow
     {
         RenamePopup.IsOpen = false;
         _renameTarget = null;
+        _shellRenameTarget = null;
     }
 
     private void RenameBox_KeyDown(object sender, KeyEventArgs e)
@@ -1454,13 +1497,23 @@ public partial class MainWindow : FluentWindow
         {
             RenamePopup.IsOpen = false;
             _renameTarget = null;
+            _shellRenameTarget = null;
         }
     }
 
     private void CommitRename()
     {
         var name = RenameBox.Text.Trim();
-        if (_renameTarget is { } b && name.Length > 0)
+        if (_shellRenameTarget is { } shellPath && name.Length > 0)
+        {
+            if (!string.Equals(name, Path.GetFileName(shellPath), StringComparison.Ordinal))
+            {
+                RunShellOperation(() => ShellFileOperations.Rename(shellPath, name),
+                    "重命名失败");
+                RefreshActive();
+            }
+        }
+        else if (_renameTarget is { } b && name.Length > 0)
         {
             b.Name = name;
             AppStorage.SaveBookmarks(_bookmarks);
@@ -1470,6 +1523,7 @@ public partial class MainWindow : FluentWindow
         }
         RenamePopup.IsOpen = false;
         _renameTarget = null;
+        _shellRenameTarget = null;
     }
 
     // ---------- command handlers ----------
@@ -1603,6 +1657,36 @@ public partial class MainWindow : FluentWindow
         RefreshActive();
     }
 
+    private void RenameButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Multi-selection rename is ambiguous (pattern rename is a separate
+        // feature); restrict the toolbar entry to exactly one item, matching
+        // what the properties button does.
+        var sources = SelectedShellPaths();
+        if (sources.Count != 1) return;
+        var target = sources[0];
+        var originalName = Path.GetFileName(target.TrimEnd(Path.DirectorySeparatorChar));
+        _shellRenameTarget = target;
+        RenameBox.Text = originalName;
+        RenamePopup.PlacementTarget = RenameButton;
+        RenamePopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        RenamePopup.IsOpen = true;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            RenameBox.Focus();
+            // Select the stem without the extension, like Explorer does on F2.
+            var withoutExtension = Path.GetFileNameWithoutExtension(originalName);
+            RenameBox.Select(0, withoutExtension.Length);
+        }), DispatcherPriority.Input);
+    }
+
+    /// <summary>
+    /// Target path while the toolbar rename popup is open. Non-null also
+    /// routes CommitRename to the shell item rename instead of the bookmark
+    /// rename that shares the same popup.
+    /// </summary>
+    private string? _shellRenameTarget;
+
     private List<string> SelectedShellPaths()
     {
         var result = new List<string>();
@@ -1635,6 +1719,10 @@ public partial class MainWindow : FluentWindow
         try
         {
             operation();
+            // Copy/move/delete/rename change folder contents; drop cached
+            // sizes so the status bar recomputes instead of showing stale
+            // numbers until the TTL lapses.
+            FolderSizeCache.Invalidate(null);
         }
         catch (OperationCanceledException)
         {
@@ -1953,23 +2041,40 @@ public partial class MainWindow : FluentWindow
             var items = browser.Items;
             var selected = browser.SelectedItems;
             var selectedCount = selected.Count;
-            var fileBytes = 0UL;
             var folders = 0;
+            var selectedFolderPaths = new List<string>();
+            var allFolders = true;
             for (var i = 0; i < selectedCount; i++)
             {
-                if (selected[i] is not { } item) continue;
-                if (item is ShellFolder) { folders++; continue; }
-                // Virtual shell items have no Size property; they just do not
-                // contribute to the byte total.
-                if (item.Properties.System.Size.Value is not { } size) continue;
-                fileBytes += size;
+                if (selected[i] is not { } item)
+                {
+                    allFolders = false;
+                    break;
+                }
+                if (item is ShellFolder)
+                {
+                    folders++;
+                    var parsing = item.ParsingName;
+                    if (!string.IsNullOrWhiteSpace(parsing) && Path.IsPathRooted(parsing))
+                    {
+                        selectedFolderPaths.Add(parsing);
+                    }
+                    continue;
+                }
+                // The custom bar only shows for an all-folder selection (the
+                // shell status bar covers sizes), so the first non-folder item
+                // decides the outcome. Stop touching the shell collection —
+                // Ctrl+A over thousands of files used to pay one COM property
+                // read per item on the UI thread just to hide the bar.
+                allFolders = false;
+                break;
             }
             var totalCount = items.Count;
             // The shell status bar already covers the common cases: total item
             // count, item size and "N selected". Keep FileTabs' bar only when
             // the selection is entirely folders; that child count is the one
             // aggregate the native view does not show.
-            if (selectedCount == 0 || selectedCount != folders)
+            if (selectedCount == 0 || !allFolders)
             {
                 StatusBar.Visibility = Visibility.Collapsed;
                 StatusText.Text = string.Empty;
@@ -1978,11 +2083,11 @@ public partial class MainWindow : FluentWindow
             else
             {
                 StatusBar.Visibility = Visibility.Visible;
-                StatusText.Text = $"已选择 {selectedCount} 个项目" +
-                    (fileBytes > 0 ? $" · {FormatByteSize(fileBytes)}" : string.Empty);
+                StatusText.Text = $"已选择 {selectedCount} 个项目";
                 StatusHintText.Text = folders > 0
                     ? $"{totalCount} 个项目 · 含 {folders} 个文件夹"
                     : $"{totalCount} 个项目";
+                BeginFolderSizeSummary(selectedFolderPaths);
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or COMException)
@@ -2001,6 +2106,66 @@ public partial class MainWindow : FluentWindow
         if (size < 1024 * 1024) return $"{size / 1024.0:F1} KB";
         if (size < 1024UL * 1024 * 1024) return $"{size / 1024.0 / 1024:F1} MB";
         return $"{size / 1024.0 / 1024 / 1024:F2} GB";
+    }
+
+    // Guard so a completed computation re-enters UpdateStatusBar exactly once
+    // per selection change; the token changes whenever the selection does.
+    private string _folderSizeRequestKey = string.Empty;
+
+    /// <summary>
+    /// Show the recursive size of the selected folders in the status bar.
+    /// Cached sizes appear immediately; unknown ones kick off background
+    /// computation and refresh the bar when done. Selection is captured in a
+    /// key so a slow folder cannot overwrite a newer selection's text.
+    /// </summary>
+    private void BeginFolderSizeSummary(List<string> folderPaths)
+    {
+        if (folderPaths.Count == 0) return;
+        var key = string.Join("|", folderPaths);
+        _folderSizeRequestKey = key;
+
+        long? total = 0;
+        var pending = false;
+        foreach (var folder in folderPaths)
+        {
+            var size = FolderSizeCache.TryGet(folder);
+            if (size is null)
+            {
+                pending = true;
+                FolderSizeCache.BeginCompute(folder);
+                total = null;
+            }
+            else if (total is { } acc && size >= 0)
+            {
+                total = acc + size;
+            }
+        }
+
+        if (total is { } known && known > 0)
+        {
+            StatusText.Text = $"已选择 {folderPaths.Count} 个文件夹 · {FormatByteSize((ulong)known)}";
+        }
+        else if (pending)
+        {
+            StatusText.Text = $"已选择 {folderPaths.Count} 个文件夹 · 计算大小中…";
+            Dispatcher.BeginInvoke(new Action(async () =>
+            {
+                // Poll briefly until every folder in this request is cached;
+                // each completion also triggers a direct refresh below.
+                for (var i = 0; i < 100; i++)
+                {
+                    await Task.Delay(150);
+                    if (_folderSizeRequestKey != key) return; // selection moved on
+                    if (_isClosing) return;
+                    var allDone = folderPaths.All(f => FolderSizeCache.TryGet(f) is not null);
+                    if (allDone)
+                    {
+                        UpdateStatusBar();
+                        return;
+                    }
+                }
+            }), DispatcherPriority.Background);
+        }
     }
 
     private void OpenTerminal_Click(object sender, RoutedEventArgs e)
@@ -2309,7 +2474,7 @@ public partial class MainWindow : FluentWindow
         if (from < 0) return;
         var tabWidth = 164d;
         if (TabStrip.ItemContainerGenerator.ContainerFromItem(_dragTab) is FrameworkElement container)
-            tabWidth = Math.Max(40, container.ActualWidth - 12);
+            tabWidth = Math.Max(40, container.ActualWidth - 2 * TabScoopWidth - 12);
         var target = from + (int)Math.Floor(delta / tabWidth);
         // Never drag an unpinned tab into the pinned block.
         target = Math.Max(_tabs.Count(t => t.IsPinned), Math.Min(_tabs.Count - 1, target));

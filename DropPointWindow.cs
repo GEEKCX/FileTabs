@@ -43,6 +43,7 @@ public sealed class DropPointWindow : Window
     private readonly FrameworkElement _iconHost;
     private readonly Image _fileIcon;
     private readonly Border _countBadgeBorder;
+    private readonly TextBlock _closeGlyph;
     private bool _isMoving;
     private NativePoint _moveStartCursor;
     private double _moveStartLeft;
@@ -155,6 +156,7 @@ public sealed class DropPointWindow : Window
             Foreground = (Brush)FindResourceOrDefault("TextFillColorSecondaryBrush", Brushes.Gray),
             ToolTip = "关闭",
         };
+        _closeGlyph = closeButton;
         closeButton.MouseLeftButtonDown += (_, e) => e.Handled = true;
         closeButton.MouseLeftButtonUp += (_, e) =>
         {
@@ -197,6 +199,10 @@ public sealed class DropPointWindow : Window
         DragEnter += (_, _) => SetDragOver(true);
         DragLeave += (_, _) => SetDragOver(false);
         PreviewDragOver += OnDragOver;
+        // 主题切换后重读画刷：托盘点在构造时快照主题资源，不订阅的话
+        // 已打开的托盘点会停留在旧配色（验收标准 8）。
+        ThemeManager.ThemeApplied += RefreshThemeBrushes;
+        Closed += (_, _) => ThemeManager.ThemeApplied -= RefreshThemeBrushes;
         MouseLeftButtonDown += OnPadMouseDown;
         MouseMove += (_, e) =>
         {
@@ -527,6 +533,32 @@ public sealed class DropPointWindow : Window
     {
         try { return Application.Current.TryFindResource(key) ?? fallback; }
         catch (Exception) { return fallback; }
+    }
+
+    /// <summary>
+    /// Re-read every theme-snapshotted brush. Called from
+    /// ThemeManager.ThemeApplied, always on the UI thread.
+    /// </summary>
+    private void RefreshThemeBrushes()
+    {
+        if (_isMoving) return;
+        _root.Background = (Brush)FindResourceOrDefault(
+            "SolidBackgroundFillColorBaseBrush", Brushes.White);
+        SetDragOver(false);
+        _primaryText.Foreground = (Brush)FindResourceOrDefault(
+            "TextFillColorPrimaryBrush", Brushes.Gray);
+        _secondaryText.Foreground = (Brush)FindResourceOrDefault(
+            "TextFillColorSecondaryBrush", Brushes.Gray);
+        _countBadgeBorder.Background = (Brush)FindResourceOrDefault(
+            "AccentFillColorDefaultBrush", Brushes.SteelBlue);
+        if (_iconHost is TextBlock iconGlyph)
+        {
+            iconGlyph.Foreground = (Brush)FindResourceOrDefault(
+                "TextFillColorSecondaryBrush", Brushes.Gray);
+        }
+        _closeGlyph.Foreground = (Brush)FindResourceOrDefault(
+            "TextFillColorSecondaryBrush", Brushes.Gray);
+        InvalidateVisual();
     }
 
     private const int GWL_EXSTYLE = -20;

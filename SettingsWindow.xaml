@@ -249,6 +249,36 @@
                                   Margin="0,8,0,0"/>
                     </StackPanel>
                 </Border>
+
+                <Border Style="{StaticResource SettingsSection}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Image Source="pack://application:,,,/icon/FileTabs.ico"
+                               Width="40" Height="40"
+                               RenderOptions.BitmapScalingMode="HighQuality"
+                               VerticalAlignment="Top" Margin="0,2,14,0"/>
+                        <StackPanel Grid.Column="1">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="FileTabs"
+                                           Style="{StaticResource SettingsSectionTitle}"/>
+                                <TextBlock x:Name="AboutVersionText"
+                                           VerticalAlignment="Center"
+                                           Margin="8,0,0,0"
+                                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                           FontSize="12"/>
+                            </StackPanel>
+                            <TextBlock Text="Windows 多标签文件管理器，基于原生 Shell 视图。"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       FontSize="12" Margin="0,6,0,0"/>
+                            <TextBlock Text="支持标签页浏览、书签、Everything 搜索、拖放中转与资源管理器接管。"
+                                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                       FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
             </StackPanel>
         </ScrollViewer>
         <Border Grid.Row="1" Padding="20,10,20,12"

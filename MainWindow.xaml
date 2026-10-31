@@ -119,12 +119,15 @@
                             </ItemsControl.ItemContainerStyle>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <!-- 所有标签统一宽度，随窗口宽度自适应（UpdateTabWidth）。 -->
+                                    <!-- 所有标签统一宽度，随窗口宽度自适应（UpdateTabWidth）。
+                                         项目宽度 = 标签体宽度 + 左右各 8px：反向圆弧必须落在项目
+                                         自己的边界内，用负边距溢出的元素会被 WPF 的 layout clip
+                                         裁掉（Grid 的 layoutClip 等于它自己的尺寸）。负边距把项目
+                                         左移 8px，相邻项目因此重叠 8px，标签体仍然严丝合缝。 -->
                                     <Grid x:Name="TabRoot" Height="30"
                                           Width="{Binding TabWidth, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                          MinWidth="64" MaxWidth="240"
-                                          Margin="0,6,0,0" VerticalAlignment="Bottom"
-                                          Background="Transparent"
+                                          MinWidth="80" MaxWidth="256"
+                                          Margin="-8,6,-8,0" VerticalAlignment="Bottom"
                                           MouseDown="TabItem_MouseDown"
                                           MouseRightButtonUp="TabItem_RightButtonUp"
                                           ToolTip="{Binding Title}">
@@ -141,7 +144,10 @@
                                                 <MenuItem Header="复制此标签页" Click="TabDuplicate_Click"/>
                                             </ContextMenu>
                                         </Grid.ContextMenu>
-                                        <Border x:Name="TabBorder" Padding="0"
+                                        <!-- 命中区只铺在标签体上：项目左右多出的 8px 与邻居重叠，
+                                             项目自身带透明底会把这 8px 的 hover 和点击抢给邻居。 -->
+                                        <Border Background="Transparent" Margin="8,0"/>
+                                        <Border x:Name="TabBorder" Padding="0" Margin="8,0"
                                                 CornerRadius="6,6,0,0"
                                                 Background="{DynamicResource FileTabs.TabInactiveBrush}">
                                             <!-- 关闭按钮浮在标题右端而不是占一列：标签统一宽度后，
@@ -176,15 +182,17 @@
                                         </Border>
                                         <!-- 原有的外圆角标签造型：底部两个反向圆弧把标签和标题区
                                              连成一体，相邻标签共用这条曲线；激活标签不透明，
-                                             画在最后，压住邻居的弧线，形成 Chrome 式波浪底边。 -->
+                                             画在最后，压住邻居的弧线，形成 Chrome 式波浪底边。
+                                             圆弧贴在项目自己的左右边缘（不再用负边距），
+                                             左弧落在本项目左 8px，右弧落在本项目右 8px。 -->
                                         <Path x:Name="ScoopLeft" Width="8" Height="8"
                                               HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                                              Margin="-8,0,0,0" IsHitTestVisible="False"
+                                              Margin="0" IsHitTestVisible="False"
                                               Fill="{Binding Background, ElementName=TabBorder}"
                                               Data="M 8,0 A 8,8 0 0 1 0,8 L 8,8 Z"/>
                                         <Path x:Name="ScoopRight" Width="8" Height="8"
                                               HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                              Margin="0,0,-8,0" IsHitTestVisible="False"
+                                              Margin="0" IsHitTestVisible="False"
                                               Fill="{Binding Background, ElementName=TabBorder}"
                                               Data="M 0,0 A 8,8 0 0 0 8,8 L 0,8 Z"/>
                                     </Grid>
@@ -326,6 +334,10 @@
                     <Button x:Name="DeleteButton" Style="{StaticResource FileTabs.CommandButton}"
                             Click="DeleteButton_Click" ToolTip="删除到回收站">
                         <ui:SymbolIcon Symbol="Delete24" FontSize="18"/>
+                    </Button>
+                    <Button x:Name="RenameButton" Style="{StaticResource FileTabs.CommandButton}"
+                            Click="RenameButton_Click" ToolTip="重命名">
+                        <ui:SymbolIcon Symbol="Rename20" FontSize="18"/>
                     </Button>
                     <Border Style="{StaticResource FileTabs.CommandSeparator}"/>
                     <Button x:Name="TerminalButton" Style="{StaticResource FileTabs.CommandButton}"

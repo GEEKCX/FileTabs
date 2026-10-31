@@ -28,6 +28,38 @@ public static class ShellFileOperations
     public static void DeleteToRecycleBin(IReadOnlyList<string> sources)
         => Run(sources, null, delete: true);
 
+    /// <summary>
+    /// Rename a single shell item. Going through IFileOperation instead of
+    /// File.Move keeps collision prompts, the undo stack and shell change
+    /// notifications identical to a native Explorer rename.
+    /// </summary>
+    public static void Rename(string source, string newName)
+    {
+        var operation = (IFileOperation)Activator.CreateInstance(
+            Type.GetTypeFromCLSID(FileOperationClsid)!)!;
+        try
+        {
+            ThrowIfFailed(operation.SetOperationFlags(FOF_ALLOWUNDO));
+            ThrowIfFailed(operation.SetOwnerWindow(GetActiveWindow()));
+            var item = CreateItem(source);
+            try
+            {
+                ThrowIfFailed(operation.RenameItem(item, newName, IntPtr.Zero));
+                ThrowIfFailed(operation.PerformOperations());
+                ThrowIfFailed(operation.GetAnyOperationsAborted(out var aborted));
+                if (aborted) throw new OperationCanceledException();
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(item);
+            }
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(operation);
+        }
+    }
+
     private static void Run(IReadOnlyList<string> sources, string? destinationFolder,
         bool delete)
     {

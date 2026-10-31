@@ -10,3 +10,4 @@ tools/
 installer/
 buildtmp/
 *.png
+.alma-snapshots

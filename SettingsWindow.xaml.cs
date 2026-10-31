@@ -1,4 +1,5 @@
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Interop;
 using Microsoft.WindowsAPICodePack.Shell;
@@ -51,6 +52,10 @@ public partial class SettingsWindow : Window
         {
             TerminalCombo.SelectedIndex = 0;
         }
+        AboutVersionText.Text = "v" + (Assembly.GetExecutingAssembly()
+            .GetName().Version is { } version
+            ? version.ToString(3)
+            : "?");
     }
 
     private void FitToWorkArea()

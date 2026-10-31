@@ -36,6 +36,13 @@ public static class ThemeManager
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     private static extern int SetWindowTheme(IntPtr hwnd, string? subAppName, string? subIdList);
 
+    /// <summary>
+    /// Raised on the UI thread after a theme switch has repainted the shared
+    /// brushes. Windows that snapshot theme resources at construction time
+    /// (e.g. DropPoint pads) must re-read them when this fires.
+    /// </summary>
+    public static event Action? ThemeApplied;
+
     public static void Apply(AppTheme theme)
     {
         var dark = theme switch
@@ -52,7 +59,6 @@ public static class ThemeManager
         ApplicationThemeManager.Apply(
             dark ? ApplicationTheme.Dark : ApplicationTheme.Light,
             Wpf.Ui.Controls.WindowBackdropType.None);
-
         // 浅色主题用 360 的浅蓝灰，但深色主题保留 FileTabs 自己的暗色表面；
         // 两套主题共用同一组资源键，切换时重绘整个标题区。
         var chrome = dark
@@ -78,6 +84,7 @@ public static class ThemeManager
         SetBrush("FileTabs.ChromeMutedTextBrush", chrome.MutedText);
         SetBrush("FileTabs.SettingsCardBrush", chrome.SettingsCard);
         SetBrush("FileTabs.SettingsCardBorderBrush", chrome.SettingsCardBorder);
+        ThemeApplied?.Invoke();
     }
 
     private sealed record ChromePalette(

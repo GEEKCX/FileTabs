@@ -1,0 +1,26 @@
+#!/bin/sh
+# pre-commit: reject commits that contain corrupted text encoding.
+#
+# Why: this machine runs ANSI code page 936 (GBK). PowerShell 5.1 cmdlets
+# Get-Content / Set-Content default to that code page, so editing a UTF-8
+# Chinese file with them silently turns text into mojibake and then writes
+# the damage back to disk. That already destroyed MainWindow.xaml once.
+#
+# The checker itself is PowerShell (check-encoding.ps1) and works on raw
+# bytes, so it is immune to the same problem.
+
+ROOT="$(git rev-parse --show-toplevel)"
+
+if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -ExecutionPolicy Bypass \
+        -File "$ROOT/check-encoding.ps1" -Root "$ROOT"
+    exit $?
+fi
+
+if command -v pwsh >/dev/null 2>&1; then
+    pwsh -NoProfile -File "$ROOT/check-encoding.ps1" -Root "$ROOT"
+    exit $?
+fi
+
+echo "pre-commit: neither powershell.exe nor pwsh found; skipping encoding check."
+exit 0

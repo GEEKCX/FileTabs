@@ -20,6 +20,8 @@
 
   <ItemGroup>
     <None Include="Everything64.dll" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Settings 关于页通过 pack URI 引用 -->
+    <Resource Include="icon\FileTabs.ico" />
   </ItemGroup>
 
   <ItemGroup>
