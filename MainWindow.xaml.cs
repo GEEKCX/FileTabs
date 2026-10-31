@@ -1799,14 +1799,13 @@ public partial class MainWindow : FluentWindow
         ToolbarMenu.IsOpen = true;
     }
 
-    private void AiButton_Click(object sender, RoutedEventArgs e)
+    private void ExtensionsButton_Click(object sender, RoutedEventArgs e)
     {
-        // 360 在命令区右侧提供 AI 入口；FileTabs 目前没有内置模型服务，
-        // 因此明确提示而不是假装打开一个空面板。
-        MessageBox.Show(this,
-            "AI 入口尚未接入模型服务。\n\n" +
-            "接入后这里会用于理解当前目录、批量重命名和整理文件。",
-            "AI 助手", MessageBoxButton.OK, MessageBoxImage.Information);
+        var window = new ExtensionsWindow(CurrentFolderPath()) { Owner = this };
+        if (window.ShowDialog() == true && window.CreatedFolderPath is { } path)
+        {
+            OpenPathInNewTab(path);
+        }
     }
 
     private void SyncToolbarMenuState()
