@@ -1,202 +1,55 @@
-using System.IO;
 using System.Windows;
 using System.Windows.Controls;
-using MessageBox = System.Windows.MessageBox;
 
 namespace FileTabs;
 
+/// <summary>
+/// 扩展中心窗口外壳：左侧列出 ExtensionsRegistry 注册的功能，
+/// 右侧用 ContentControl 承载选中功能的页面（UserControl）。
+/// 窗口本身不实现任何具体功能；页面通过 Page 关联回传结果，
+/// 例如目录模板页面会把创建结果写到 Owner 的 CreatedFolderPath。
+/// </summary>
 public partial class ExtensionsWindow : Window
 {
-    private List<FolderTemplate> _templates = new();
-    private bool _isInitializing = true;
+    /// <summary>由扩展页面写入、供宿主窗口（MainWindow）读取的结果值。</summary>
+    public string? CreatedFolderPath { get; internal set; }
 
-    public string? CreatedFolderPath { get; private set; }
+    /// <summary>打开窗口时所在的目录，作为目录模板功能的默认保存位置。</summary>
+    public string? InitialFolder { get; }
+
+    /// <summary>功能 Id → 已创建页面，切换功能时保留各自状态。</summary>
+    private readonly Dictionary<string, FrameworkElement> _pages = new();
+
+    private bool _isInitializing = true;
 
     public ExtensionsWindow(string? initialFolder)
     {
+        InitialFolder = initialFolder;
         InitializeComponent();
-        RootPathBox.Text = initialFolder ?? "";
-        ReloadTemplates();
+        Loaded += (_, _) => InitializeFeatures();
+    }
+
+    private void InitializeFeatures()
+    {
+        var features = ExtensionsRegistry.Snapshot();
+        FeatureList.ItemsSource = features;
+        if (features.Count > 0)
+        {
+            FeatureList.SelectedIndex = 0;
+        }
         _isInitializing = false;
-        UpdateTemplateDescription();
-        UpdatePreview();
-        Loaded += (_, _) =>
-        {
-            ItemNumberBox.Focus();
-            ItemNumberBox.SelectAll();
-        };
     }
 
-    private void ReloadTemplates(string? preferredName = null)
+    private void FeatureList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        var wasInitializing = _isInitializing;
-        _isInitializing = true;
-        try
+        if (FeatureList.SelectedItem is not ExtensionFeature feature) return;
+
+        // 惰性创建 + 缓存：同一功能切回来时保留输入状态。
+        if (!_pages.TryGetValue(feature.Id, out var page))
         {
-            _templates = AppStorage.LoadFolderTemplates()
-                .Where(template => !string.IsNullOrWhiteSpace(template.Name))
-                .ToList();
-            TemplateCombo.ItemsSource = _templates;
-
-            if (_templates.Count == 0)
-            {
-                TemplateCombo.SelectedIndex = -1;
-                TemplateCombo.IsEnabled = false;
-                ItemNumberBox.IsEnabled = false;
-                InputLabelText.Text = "名称/编号";
-                ManageTemplatesButton.Content = "新建模板";
-                TemplateDescriptionText.Text =
-                    "还没有目录模板，点击左下角“新建模板”开始。";
-                PreviewTree.ItemsSource = null;
-                PreviewStatusText.Text = "";
-                CreateButton.IsEnabled = false;
-                return;
-            }
-
-            TemplateCombo.IsEnabled = true;
-            ItemNumberBox.IsEnabled = true;
-            ManageTemplatesButton.Content = "管理模板";
-            var selected = _templates.FirstOrDefault(template =>
-                               string.Equals(template.Name, preferredName,
-                                   StringComparison.OrdinalIgnoreCase))
-                           ?? _templates[0];
-            TemplateCombo.SelectedItem = selected;
+            page = feature.CreateContent(this);
+            _pages[feature.Id] = page;
         }
-        finally
-        {
-            _isInitializing = wasInitializing;
-        }
-
-        if (!_isInitializing)
-        {
-            UpdateTemplateDescription();
-            UpdatePreview();
-        }
-    }
-
-    private void TemplateCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_isInitializing) return;
-        UpdateTemplateDescription();
-        UpdatePreview();
-    }
-
-    private void UpdateTemplateDescription()
-    {
-        var template = TemplateCombo.SelectedItem as FolderTemplate;
-        TemplateDescriptionText.Text = template?.Description
-            ?? (_templates.Count == 0
-                ? "还没有目录模板，点击左下角“新建模板”开始。"
-                : "");
-        InputLabelText.Text = template is null
-            ? "名称/编号"
-            : FolderTemplateService.GetInputLabel(template);
-        ItemNumberBox.ToolTip = $"输入{InputLabelText.Text}";
-    }
-
-    private void RootPathBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!_isInitializing) UpdatePreview();
-    }
-
-    private void ItemNumberBox_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!_isInitializing) UpdatePreview();
-    }
-
-    private void UpdatePreview()
-    {
-        if (_isInitializing) return;
-
-        PreviewTree.ItemsSource = null;
-        CreateButton.IsEnabled = false;
-        CreateButton.Content = "创建文件夹";
-
-        if (TemplateCombo.SelectedItem is not FolderTemplate template)
-        {
-            PreviewStatusText.Text = "请先选择模板。";
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(RootPathBox.Text))
-        {
-            PreviewStatusText.Text = "请选择保存位置。";
-            return;
-        }
-
-        if (string.IsNullOrWhiteSpace(ItemNumberBox.Text))
-        {
-            PreviewStatusText.Text = $"输入{InputLabelText.Text}后显示预览。";
-            return;
-        }
-
-        try
-        {
-            var plan = FolderTemplateService.CreatePlan(
-                RootPathBox.Text, template, ItemNumberBox.Text);
-            PreviewTree.ItemsSource = new[]
-            {
-                FolderTemplateService.BuildPreviewTree(plan),
-            };
-            PreviewStatusText.Text = plan.NewFolderCount == 0
-                ? "全部目录已存在，可直接打开。"
-                : $"将新建 {plan.NewFolderCount} 个目录，跳过 {plan.ExistingFolderCount} 个已存在目录。";
-            CreateButton.Content = plan.NewFolderCount == 0
-                ? "打开文件夹"
-                : "创建文件夹";
-            CreateButton.IsEnabled = true;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException
-            or UnauthorizedAccessException or NotSupportedException)
-        {
-            PreviewStatusText.Text = ex.Message;
-        }
-    }
-
-    private void BrowseRoot_Click(object sender, RoutedEventArgs e)
-    {
-        using var dialog = new System.Windows.Forms.FolderBrowserDialog
-        {
-            ShowNewFolderButton = true,
-            UseDescriptionForTitle = true,
-            Description = "选择目录的保存位置",
-        };
-        if (Directory.Exists(RootPathBox.Text))
-        {
-            dialog.SelectedPath = RootPathBox.Text;
-        }
-        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
-        {
-            RootPathBox.Text = dialog.SelectedPath;
-        }
-    }
-
-    private void ManageTemplates_Click(object sender, RoutedEventArgs e)
-    {
-        var selectedName = (TemplateCombo.SelectedItem as FolderTemplate)?.Name;
-        var window = new TemplateManagerWindow(selectedName) { Owner = this };
-        window.ShowDialog();
-        ReloadTemplates(window.SelectedTemplateName ?? selectedName);
-    }
-
-    private void CreateFolders_Click(object sender, RoutedEventArgs e)
-    {
-        if (TemplateCombo.SelectedItem is not FolderTemplate template) return;
-
-        try
-        {
-            var plan = FolderTemplateService.CreatePlan(
-                RootPathBox.Text, template, ItemNumberBox.Text);
-            FolderTemplateService.CreateFolders(plan);
-            CreatedFolderPath = plan.Folders[0].FullPath;
-            DialogResult = true;
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException
-            or UnauthorizedAccessException or NotSupportedException)
-        {
-            MessageBox.Show(this, ex.Message, "创建文件夹失败",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            UpdatePreview();
-        }
+        FeatureHost.Content = page;
     }
 }
