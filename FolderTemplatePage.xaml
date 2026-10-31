@@ -76,12 +76,17 @@
                                Text="名称/编号" VerticalAlignment="Center"
                                Margin="0,12,0,0"/>
                     <TextBox x:Name="ItemNumberBox" Grid.Row="3" Grid.Column="1"
-                             Height="32" Margin="0,12,0,0"
+                             Height="52" Margin="0,12,0,0"
+                             AcceptsReturn="True"
+                             VerticalScrollBarVisibility="Auto"
+                             VerticalContentAlignment="Top"
+                             Padding="4,4,4,0"
                              TextChanged="ItemNumberBox_TextChanged"/>
 
                     <TextBlock Grid.Row="4" Grid.Column="1"
-                               Text="模板支持 {名称}、{日期}、{月份}；输入值不能包含 \ / : * ? &quot; &lt; &gt; |。"
-                               Style="{StaticResource PageHint}"/>
+                               Text="模板支持 {名称}、{序号}、{日期}、{月份}；输入支持多行（或逗号分隔），每行生成一棵目录树；{序号} 按行自动编号 001、002…；单行内容不能包含 \ / : * ? &quot; &lt; &gt; |。"
+                               Style="{StaticResource PageHint}"
+                               ToolTip="示例：输入三行 A、B、C，模板根目录为 {名称}，则同时创建 A、B、C 三棵目录树。"/>
                 </Grid>
             </StackPanel>
         </Border>

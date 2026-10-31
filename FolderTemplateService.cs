@@ -30,6 +30,17 @@ public sealed class FolderTemplatePlan
     public int ExistingFolderCount => Folders.Count(item => item.Exists);
 }
 
+/// <summary>批量创建的一组计划；每行输入对应一棵 Plans 里的树。</summary>
+public sealed class FolderTemplatePlanSet
+{
+    public string BaseFolder { get; init; } = "";
+    public IReadOnlyList<FolderTemplatePlan> Plans { get; init; } =
+        Array.Empty<FolderTemplatePlan>();
+
+    public int NewFolderCount => Plans.Sum(plan => plan.NewFolderCount);
+    public int ExistingFolderCount => Plans.Sum(plan => plan.ExistingFolderCount);
+}
+
 public sealed class FolderPreviewNode
 {
     public string Name { get; init; } = "";
@@ -61,6 +72,20 @@ public static class FolderTemplateService
         string inputValue,
         DateTime? now = null)
     {
+        return CreatePlans(baseFolder, template, inputValue, now).Plans[0];
+    }
+
+    /// <summary>
+    /// 批量创建：输入按行（或逗号/分号）拆分，每行生成一棵独立的目录树。
+    /// {序号} 渲染为该行在输入中的三位序号（001、002…）；单行输入时序号为 001。
+    /// 相同渲染结果的行自动合并，不会重复累积。
+    /// </summary>
+    public static FolderTemplatePlanSet CreatePlans(
+        string baseFolder,
+        FolderTemplate template,
+        string inputValue,
+        DateTime? now = null)
+    {
         if (template is null) throw new ArgumentException("请选择一个目录模板。");
 
         var baseFull = NormalizeBaseFolder(baseFolder);
@@ -69,14 +94,43 @@ public static class FolderTemplateService
         {
             throw new ArgumentException($"请输入{inputLabel}。");
         }
-        var input = inputValue.Trim();
+
+        // 每行一个实例；逗号/分号也算分隔，方便从表格里整列粘贴。
+        var entries = inputValue
+            .Split(new[] { '\r', '\n', ',', '，', ';', '；' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(raw => raw.Trim())
+            .Where(raw => raw.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (entries.Count == 0)
+        {
+            throw new ArgumentException($"请输入{inputLabel}。");
+        }
+
+        var plans = new List<FolderTemplatePlan>();
+        var seenRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < entries.Count; i++)
+        {
+            plans.Add(BuildSinglePlan(baseFull, template, entries[i], i + 1, now));
+        }
+        return new FolderTemplatePlanSet { BaseFolder = baseFull, Plans = plans };
+    }
+
+    private static FolderTemplatePlan BuildSinglePlan(
+        string baseFull,
+        FolderTemplate template,
+        string input,
+        int sequence,
+        DateTime? now)
+    {
+        var inputLabel = GetInputLabel(template);
         ValidateSegment(input, inputLabel);
 
         if (string.IsNullOrWhiteSpace(template.RootFolder))
         {
             throw new ArgumentException("模板根目录不能为空。");
         }
-        var renderedRoot = RenderValue(template.RootFolder, input, now ?? DateTime.Now);
+        var renderedRoot = RenderValue(template.RootFolder, input, sequence, now ?? DateTime.Now);
         ValidateSegment(renderedRoot, "模板根目录");
 
         var planItems = new List<FolderTemplatePlanItem>();
@@ -90,7 +144,7 @@ public static class FolderTemplateService
                 throw new ArgumentException("模板包含空的目录路径。");
             }
 
-            var rendered = RenderValue(folder, input, now ?? DateTime.Now);
+            var rendered = RenderValue(folder, input, sequence, now ?? DateTime.Now);
             var relativeSegments = SplitRelativePath(rendered);
             var segments = new List<string> { renderedRoot };
             segments.AddRange(relativeSegments);
@@ -154,7 +208,22 @@ public static class FolderTemplateService
 
     public static FolderPreviewNode BuildPreviewTree(FolderTemplatePlan plan)
     {
-        var root = new MutablePreviewNode(plan.BaseFolder, isBase: true);
+        return BuildPreviewTrees(new[] { plan })[0];
+    }
+
+    /// <summary>批量预览：所有实例合并到同一个保存位置根节点下。</summary>
+    public static FolderPreviewNode[] BuildPreviewTrees(IReadOnlyList<FolderTemplatePlan> plans)
+    {
+        var root = new MutablePreviewNode(plans[0].BaseFolder, isBase: true);
+        foreach (var plan in plans)
+        {
+            AddPlanToPreview(root, plan);
+        }
+        return new[] { root.ToPreviewNode() };
+    }
+
+    private static void AddPlanToPreview(MutablePreviewNode root, FolderTemplatePlan plan)
+    {
         foreach (var item in plan.Folders)
         {
             var parent = root;
@@ -174,8 +243,6 @@ public static class FolderTemplateService
             }
             parent.Exists = item.Exists;
         }
-
-        return root.ToPreviewNode();
     }
 
     private static void AddPlanItem(
@@ -227,11 +294,13 @@ public static class FolderTemplateService
         return Path.TrimEndingDirectorySeparator(fullPath);
     }
 
-    private static string RenderValue(string value, string inputValue, DateTime now)
+    private static string RenderValue(string value, string inputValue, int sequence, DateTime now)
     {
         var rendered = value
             .Replace("{名称}", inputValue, StringComparison.Ordinal)
             .Replace("{货号}", inputValue, StringComparison.Ordinal)
+            .Replace("{序号}", sequence.ToString("000", CultureInfo.InvariantCulture),
+                StringComparison.Ordinal)
             .Replace("{日期}", now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 StringComparison.Ordinal)
             .Replace("{月份}", now.ToString("yyyy-MM", CultureInfo.InvariantCulture),

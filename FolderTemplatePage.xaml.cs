@@ -142,16 +142,17 @@ public partial class FolderTemplatePage : UserControl
 
         try
         {
-            var plan = FolderTemplateService.CreatePlan(
+            var planSet = FolderTemplateService.CreatePlans(
                 RootPathBox.Text, template, ItemNumberBox.Text);
-            PreviewTree.ItemsSource = new[]
-            {
-                FolderTemplateService.BuildPreviewTree(plan),
-            };
-            PreviewStatusText.Text = plan.NewFolderCount == 0
-                ? "全部目录已存在，可直接打开。"
-                : $"将新建 {plan.NewFolderCount} 个目录，跳过 {plan.ExistingFolderCount} 个已存在目录。";
-            CreateButton.Content = plan.NewFolderCount == 0
+            PreviewTree.ItemsSource =
+                FolderTemplateService.BuildPreviewTrees(planSet.Plans);
+            PreviewStatusText.Text = planSet.NewFolderCount == 0
+                ? (planSet.Plans.Count > 1
+                    ? $"全部目录已存在（{planSet.Plans.Count} 个实例），可直接打开。"
+                    : "全部目录已存在，可直接打开。")
+                : $"将新建 {planSet.NewFolderCount} 个目录，跳过 {planSet.ExistingFolderCount} 个已存在目录" +
+                  (planSet.Plans.Count > 1 ? $"（{planSet.Plans.Count} 个实例）。" : "。");
+            CreateButton.Content = planSet.NewFolderCount == 0
                 ? "打开文件夹"
                 : "创建文件夹";
             CreateButton.IsEnabled = true;
@@ -195,10 +196,15 @@ public partial class FolderTemplatePage : UserControl
 
         try
         {
-            var plan = FolderTemplateService.CreatePlan(
+            var planSet = FolderTemplateService.CreatePlans(
                 RootPathBox.Text, template, ItemNumberBox.Text);
-            FolderTemplateService.CreateFolders(plan);
-            _owner.CreatedFolderPath = plan.Folders[0].FullPath;
+            // 批量创建：逐棵树执行；CreateFolders 会先全量预检再创建，
+            // 所以中途失败不会留下半棵树（已建成的目录会被跳过）。
+            foreach (var plan in planSet.Plans)
+            {
+                FolderTemplateService.CreateFolders(plan);
+            }
+            _owner.CreatedFolderPath = planSet.Plans[0].Folders[0].FullPath;
             _owner.DialogResult = true;
             _owner.Close();
         }
