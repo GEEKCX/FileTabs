@@ -38,6 +38,54 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- 搜索结果上方的类型筛选：只有当前选中的一类是高亮状态，
+             点击已选中的类不会把筛选清空。 -->
+        <Style x:Key="SearchFilterChip" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="Margin" Value="0,0,2,2"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bg" CornerRadius="4"
+                                Padding="{TemplateBinding Padding}"
+                                Background="Transparent"
+                                BorderBrush="Transparent"
+                                BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bg" Property="Background"
+                                        Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bg" Property="Background"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <Setter TargetName="bg" Property="BorderBrush"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <Setter Property="Foreground"
+                                        Value="{DynamicResource TextOnAccentFillColorPrimaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 范围是低频切换项，用一行低对比度的文字按钮，不和类型筛选抢注意力。 -->
+        <Style x:Key="SearchScopeButtonStyle" TargetType="Button"
+               BasedOn="{StaticResource Fluent.IconButton}">
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+        </Style>
     </Window.Resources>
 
     <DockPanel>
@@ -816,6 +864,59 @@
                                        MouseLeftButtonDown="OpenEverything_Click"/>
                         </StackPanel>
                         </DockPanel>
+                    </Border>
+                    <Border DockPanel.Dock="Top" Padding="8,5,8,4"
+                            Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                            BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                            BorderThickness="0,0,0,1">
+                        <StackPanel>
+                            <WrapPanel x:Name="SearchTypePanel" Margin="0,0,0,1">
+                                <ToggleButton x:Name="SearchTypeAll" Content="全部" Tag="all"
+                                              IsChecked="True" Style="{StaticResource SearchFilterChip}"
+                                              Checked="SearchTypeFilter_Changed"
+                                              Unchecked="SearchTypeFilter_Changed"/>
+                                <ToggleButton x:Name="SearchTypeDocument" Content="文档" Tag="document"
+                                              Style="{StaticResource SearchFilterChip}"
+                                              Checked="SearchTypeFilter_Changed"
+                                              Unchecked="SearchTypeFilter_Changed"/>
+                                <ToggleButton x:Name="SearchTypeImage" Content="图片" Tag="image"
+                                              Style="{StaticResource SearchFilterChip}"
+                                              Checked="SearchTypeFilter_Changed"
+                                              Unchecked="SearchTypeFilter_Changed"/>
+                                <ToggleButton x:Name="SearchTypeVideo" Content="视频" Tag="video"
+                                              Style="{StaticResource SearchFilterChip}"
+                                              Checked="SearchTypeFilter_Changed"
+                                              Unchecked="SearchTypeFilter_Changed"/>
+                                <ToggleButton x:Name="SearchTypeAudio" Content="音频" Tag="audio"
+                                              Style="{StaticResource SearchFilterChip}"
+                                              Checked="SearchTypeFilter_Changed"
+                                              Unchecked="SearchTypeFilter_Changed"/>
+                                <ToggleButton x:Name="SearchTypeArchive" Content="压缩包" Tag="archive"
+                                              Style="{StaticResource SearchFilterChip}"
+                                              Checked="SearchTypeFilter_Changed"
+                                              Unchecked="SearchTypeFilter_Changed"/>
+                                <ToggleButton x:Name="SearchTypeFolder" Content="文件夹" Tag="folder"
+                                              Style="{StaticResource SearchFilterChip}"
+                                              Checked="SearchTypeFilter_Changed"
+                                              Unchecked="SearchTypeFilter_Changed"/>
+                            </WrapPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                <Button x:Name="SearchScopeButton"
+                                        Style="{StaticResource SearchScopeButtonStyle}"
+                                        Click="SearchScopeButton_Click"
+                                        ToolTip="选择搜索范围">
+                                    <StackPanel Orientation="Horizontal"
+                                                VerticalAlignment="Center">
+                                        <TextBlock Text="范围：" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="SearchScopeText" Text="此电脑"
+                                                   VerticalAlignment="Center"/>
+                                        <ui:SymbolIcon Symbol="ChevronDown20" FontSize="9"
+                                                       Margin="2,0,0,0"
+                                                       VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
                     </Border>
                     <ListBox x:Name="SearchResults" BorderThickness="0" Background="Transparent"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"

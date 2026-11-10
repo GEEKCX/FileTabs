@@ -2965,11 +2965,111 @@ public partial class MainWindow : FluentWindow
     private Task? _searchWorker;
 
     private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        => StartSearch(delayMilliseconds: 150);
+
+    private const string SearchScopeCurrent = "current";
+
+    private string _searchTypeFilter = "all";
+    private string? _searchScopePath;
+    private bool _updatingTypeFilters;
+
+    private void SearchTypeFilter_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded || _updatingTypeFilters) return;
+        if (sender is not System.Windows.Controls.Primitives.ToggleButton clicked) return;
+
+        if (clicked.IsChecked != true)
+        {
+            // 单选行为：点中的一类保持选中，再点一次不会退化成“没有筛选”。
+            _updatingTypeFilters = true;
+            clicked.IsChecked = true;
+            _updatingTypeFilters = false;
+            return;
+        }
+
+        _searchTypeFilter = clicked.Tag as string ?? "all";
+        _updatingTypeFilters = true;
+        try
+        {
+            foreach (var chip in SearchTypePanel.Children
+                         .OfType<System.Windows.Controls.Primitives.ToggleButton>())
+            {
+                chip.IsChecked = ReferenceEquals(chip, clicked);
+            }
+        }
+        finally
+        {
+            _updatingTypeFilters = false;
+        }
+
+        StartSearch(delayMilliseconds: 0);
+    }
+
+    private void SearchScopeButton_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu
+        {
+            PlacementTarget = SearchScopeButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+            MinWidth = SearchScopeButton.ActualWidth,
+        };
+
+        AddScopeItem(menu, "此电脑", null);
+        AddScopeItem(menu, "当前文件夹", SearchScopeCurrent,
+            CurrentFolderPath() is not null);
+
+        try
+        {
+            foreach (var drive in DriveInfo.GetDrives())
+            {
+                if (!drive.IsReady) continue;
+                AddScopeItem(menu, drive.Name.TrimEnd('\\'), drive.RootDirectory.FullName);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 盘符枚举失败时仍然可以选“此电脑/当前文件夹”。
+        }
+
+        menu.IsOpen = true;
+    }
+
+    private void AddScopeItem(ContextMenu menu, string label, string? path,
+        bool isEnabled = true)
+    {
+        var item = new MenuItem
+        {
+            Header = label,
+            IsCheckable = true,
+            IsChecked = string.Equals(path, _searchScopePath, StringComparison.OrdinalIgnoreCase),
+            IsEnabled = isEnabled,
+        };
+        item.Click += (_, _) =>
+        {
+            _searchScopePath = path;
+            SearchScopeText.Text = label;
+            StartSearch(delayMilliseconds: 0);
+        };
+        menu.Items.Add(item);
+    }
+
+    private string ComposeSearchQuery(string text)
+        => SearchQueryBuilder.Build(text, _searchTypeFilter, SelectedSearchScopePath());
+
+    /// <summary>null 表示不限制范围（此电脑）。</summary>
+    private string? SelectedSearchScopePath()
+        => _searchScopePath == SearchScopeCurrent ? CurrentFolderPath() : _searchScopePath;
+
+    /// <summary>
+    /// 输入变化和筛选切换共用同一条搜索路径；筛选点击不等待去抖，
+    /// 让结果立刻跟着按钮走。
+    /// </summary>
+    private void StartSearch(int delayMilliseconds)
     {
         _searchCts?.Cancel();
-        var query = SearchBox.Text.Trim();
+        var text = SearchBox.Text.Trim();
 
-        if (query.Length == 0)
+        if (text.Length == 0)
         {
             _searchCts = null;
             CancelPendingSearch();
@@ -2980,16 +3080,25 @@ public partial class MainWindow : FluentWindow
 
         var cts = new CancellationTokenSource();
         _searchCts = cts;
+        var query = ComposeSearchQuery(text);
         var sort = _searchSort;
-        _ = QueueSearchAsync(query, sort, cts);
+        _ = QueueSearchAsync(query, sort, cts, delayMilliseconds);
     }
 
     private async Task QueueSearchAsync(
-        string query, EverythingClient.SortMode sort, CancellationTokenSource cts)
+        string query, EverythingClient.SortMode sort, CancellationTokenSource cts,
+        int delayMilliseconds)
     {
         try
         {
-            await Task.Delay(150, cts.Token);
+            if (delayMilliseconds > 0)
+            {
+                await Task.Delay(delayMilliseconds, cts.Token);
+            }
+            else
+            {
+                cts.Token.ThrowIfCancellationRequested();
+            }
             RequestSearch(query, sort);
         }
         catch (OperationCanceledException)
@@ -3101,7 +3210,8 @@ public partial class MainWindow : FluentWindow
                     {
                         if (version != _searchVersion) return;
                     }
-                    if (!string.Equals(SearchBox.Text.Trim(), query, StringComparison.Ordinal)) return;
+                    if (!string.Equals(ComposeSearchQuery(SearchBox.Text.Trim()), query,
+                            StringComparison.Ordinal)) return;
                     if (error is not null)
                     {
                         SearchHintText.Text = error;
@@ -3138,7 +3248,8 @@ public partial class MainWindow : FluentWindow
             {
                 if (version != _searchVersion) return;
             }
-            if (!string.Equals(SearchBox.Text.Trim(), query, StringComparison.Ordinal)) return;
+            if (!string.Equals(ComposeSearchQuery(SearchBox.Text.Trim()), query,
+                    StringComparison.Ordinal)) return;
             SearchResultCount.Text = "0 个结果";
             SearchHintText.Text = "Everything 搜索超时";
             SearchHintPopup.IsOpen = true;
@@ -3434,7 +3545,7 @@ public partial class MainWindow : FluentWindow
 
     private void OpenEverything_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        var query = SearchBox.Text.Trim();
+        var query = ComposeSearchQuery(SearchBox.Text.Trim());
         if (string.IsNullOrWhiteSpace(query)) return;
         try
         {
