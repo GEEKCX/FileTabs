@@ -53,6 +53,9 @@ dotnet build FileTabs.csproj
 # Release（自包含单文件，输出到 bin\Release\net10.0-windows\win-x64\publish\）
 .\publish.ps1
 
+# 测试（本机未配置 NuGet 源时，先加 --source https://api.nuget.org/v3/index.json 还原）
+dotnet test tests/FileTabs.Tests/FileTabs.Tests.csproj
+
 # Inno Setup 安装包（输出到 installer\FileTabs-x.y.z-setup.exe）
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss
 ```
