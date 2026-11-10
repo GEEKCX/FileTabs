@@ -1,7 +1,8 @@
-﻿<# Produce a self-contained single-file release in .\publish\ #>
+<# Produce a self-contained single-file release in .\publish\ #>
 
-# PATH 上的 dotnet 可能是无 SDK 的运行时（如 C:\Program Files\dotnet），
-# publish 需要 SDK。按优先级探测：环境变量 → 常见安装位。
+# dotnet on PATH may be a runtime without an SDK (for example
+# C:\Program Files\dotnet). Publish needs the SDK, so probe:
+# FILETABS_DOTNET, common install locations, then PATH.
 $dotnet = $null
 foreach ($candidate in @(
     $env:FILETABS_DOTNET,
@@ -11,20 +12,35 @@ foreach ($candidate in @(
     if ($candidate -and (Test-Path $candidate)) { $dotnet = $candidate; break }
 }
 if (-not $dotnet) {
-    # 最后兜底：PATH 上能跑通且带 SDK 的 dotnet。
     $cmd = Get-Command dotnet -ErrorAction SilentlyContinue
     if ($cmd -and (& $cmd.Source --list-sdks 2>$null)) { $dotnet = $cmd.Source }
 }
 if (-not $dotnet) {
-    Write-Error "未找到带 SDK 的 dotnet。可设置环境变量 FILETABS_DOTNET 指向完整路径。"
+    Write-Error "No dotnet with an SDK found. Set FILETABS_DOTNET to its full path."
     exit 1
 }
 Write-Host "using dotnet: $dotnet"
+
+# Single-file publish pulls Microsoft.NET.ILLink.Tasks on first use. This
+# machine has no NuGet sources configured, so restore explicitly against
+# nuget.org; otherwise a fresh machine or a cleared package cache fails with
+# NU1100 before publish ever starts.
+& $dotnet restore FileTabs.csproj `
+    -r win-x64 `
+    -p:PublishSingleFile=true `
+    -p:IncludeNativeLibrariesForSelfExtract=true `
+    -p:PublishReadyToRun=true `
+    -p:EnableCompressionInSingleFile=false `
+    --source "https://api.nuget.org/v3/index.json" `
+    -v minimal
+
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $dotnet publish FileTabs.csproj `
     -c Release `
     -r win-x64 `
     --self-contained true `
+    --no-restore `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true `
     -p:PublishReadyToRun=true `

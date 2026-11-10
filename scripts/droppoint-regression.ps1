@@ -1,4 +1,4 @@
-﻿<#
+<#
 DropPoint regression (PRD acceptance #1 + #10 reuse path + render smoke).
 
 Drives a running (or freshly started) FileTabs instance: sends the global
@@ -6,7 +6,7 @@ hot-key Shift+CapsLock four times, then asserts against %APPDATA%\FileTabs\app.l
   - the 1st press creates a pad at slot 0 (right-center base position)
   - presses 2-4 REUSE the empty pad instead of stacking new ones (PRD #10:
     empty pads are reused; slots 1/2 and the 3-pad limit only appear when
-    pads hold files, which requires a human OLE drag — see NOTES.md)
+    pads hold files, which requires a human OLE drag - see NOTES.md)
 Captures the pad window to PNG so visuals can be eyeballed.
 
 Not automatable here (needs a human): drag-in/drag-out through OLE (#2/#3/#5),
@@ -37,7 +37,8 @@ public static class DropPointNative {
     [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
     public struct RECT { public int L, T, R, B; }
 
-    // All top-level visible windows of a process whose title contains "拖放中转"
+    // All top-level visible windows of a process whose title is the Chinese
+    // DropPoint caption (kept as char codes so this script stays ASCII-only).
     // (a pad is WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW, so it never shows in
     // EnumWindows' usual first-match helpers).
     public static List<IntPtr> FindPadWindows(uint pid) {
@@ -48,7 +49,9 @@ public static class DropPointNative {
             if (p != pid) return true;
             var sb = new StringBuilder(128);
             GetWindowTextW(h, sb, 128);
-            if (sb.ToString().Contains("拖放中转")) found.Add(h);
+            var title = new string(new[] {
+                (char)0x62D6, (char)0x653E, (char)0x4E2D, (char)0x8F6C });
+            if (sb.ToString().Contains(title)) found.Add(h);
             return true;
         }, IntPtr.Zero);
         return found;
@@ -125,6 +128,9 @@ finally {
 Start-Sleep -Seconds 1
 $newLines = @()
 if (Test-Path $log) {
+    # AppStorage rotates app.log at 1 MB. If that happened during the run,
+    # the current file is a fresh one and the old byte offset is past EOF.
+    if ((Get-Item $log).Length -lt $baseLength) { $baseLength = 0 }
     $stream = [System.IO.File]::Open($log, 'Open', 'Read', 'ReadWrite')
     try {
         [void]$stream.Seek($baseLength, 'Begin')
