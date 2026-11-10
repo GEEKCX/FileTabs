@@ -6,23 +6,29 @@ namespace FileTabs;
 /// <summary>
 /// 扩展中心窗口外壳：左侧列出 ExtensionsRegistry 注册的功能，
 /// 右侧用 ContentControl 承载选中功能的页面（UserControl）。
-/// 窗口本身不实现任何具体功能；页面通过 Page 关联回传结果，
-/// 例如目录模板页面会把创建结果写到 Owner 的 CreatedFolderPath。
+/// 窗口本身不实现任何具体功能；页面通过 RequestedOpenPath /
+/// RefreshRequested 把动作回传给宿主窗口（MainWindow）。
 /// </summary>
 public partial class ExtensionsWindow : Window
 {
-    /// <summary>由扩展页面写入、供宿主窗口（MainWindow）读取的结果值。</summary>
-    public string? CreatedFolderPath { get; internal set; }
+    /// <summary>页面请求宿主在关闭后打开的路径（通常是新建的目录）。</summary>
+    public string? RequestedOpenPath { get; internal set; }
 
-    /// <summary>打开窗口时所在的目录，作为目录模板功能的默认保存位置。</summary>
-    public string? InitialFolder { get; }
+    /// <summary>页面改动过当前目录，请求宿主刷新文件列表。</summary>
+    public bool RefreshRequested { get; internal set; }
+
+    /// <summary>打开窗口时的宿主快照（当前目录 + 选中项）。</summary>
+    public ExtensionsContext Context { get; }
+
+    /// <summary>目录模板功能的默认保存位置。</summary>
+    public string? InitialFolder => Context.CurrentFolder;
 
     /// <summary>功能 Id → 已创建页面，切换功能时保留各自状态。</summary>
     private readonly Dictionary<string, FrameworkElement> _pages = new();
 
-    public ExtensionsWindow(string? initialFolder)
+    public ExtensionsWindow(ExtensionsContext context)
     {
-        InitialFolder = initialFolder;
+        Context = context;
         InitializeComponent();
         Loaded += (_, _) => InitializeFeatures();
     }

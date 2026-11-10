@@ -1,0 +1,149 @@
+<UserControl x:Class="FileTabs.BatchRenamePage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style x:Key="PageCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource FileTabs.SettingsCardBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource FileTabs.SettingsCardBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="16"/>
+        </Style>
+
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
+        <Style x:Key="PageHint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="12"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Style="{StaticResource PageCard}">
+            <StackPanel>
+                <DockPanel>
+                    <TextBlock Text="批量重命名" Style="{StaticResource SectionTitle}"/>
+                    <TextBlock x:Name="SelectionSummaryText" DockPanel.Dock="Right"
+                               HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Style="{StaticResource PageHint}" Margin="8,0,0,0"/>
+                </DockPanel>
+
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="96"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="命名模板" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="TemplateBox" Grid.Column="1" Height="32"
+                             Text="{}{原名}-{序号}"
+                             TextChanged="Input_Changed"/>
+
+                    <TextBlock Grid.Row="1" Text="选项" Style="{StaticResource FieldLabel}"
+                               Margin="0,12,0,0"/>
+                    <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal"
+                                Margin="0,12,0,0" VerticalAlignment="Center">
+                        <CheckBox x:Name="PreserveExtensionCheck" Content="保留扩展名"
+                                  IsChecked="True" VerticalAlignment="Center"
+                                  Checked="Input_Changed" Unchecked="Input_Changed"/>
+                        <TextBlock Text="起始序号" Margin="24,0,8,0" VerticalAlignment="Center"/>
+                        <TextBox x:Name="StartNumberBox" Width="64" Height="32"
+                                 Text="1" VerticalAlignment="Center"
+                                 TextChanged="Input_Changed"/>
+                        <TextBlock Text="位数" Margin="16,0,8,0" VerticalAlignment="Center"/>
+                        <TextBox x:Name="DigitsBox" Width="52" Height="32"
+                                 Text="3" VerticalAlignment="Center"
+                                 TextChanged="Input_Changed"/>
+                    </StackPanel>
+
+                    <TextBlock Grid.Row="2" Grid.Column="1"
+                               Text="变量：{原名} 不含扩展名、{原文件名} 含扩展名、{扩展名} 不含点、{序号} 按选中顺序编号、{日期} 形如 20261110。"
+                               Style="{StaticResource PageHint}"/>
+
+                    <TextBlock Grid.Row="3" Grid.Column="1"
+                               Text="重命名沿用系统文件操作，失败的项目会单独列出；执行后可点“撤销上次重命名”还原。"
+                               Style="{StaticResource PageHint}"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="2" Style="{StaticResource PageCard}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <DockPanel>
+                    <TextBlock Text="预览" Style="{StaticResource SectionTitle}"/>
+                    <TextBlock x:Name="PreviewStatusText" DockPanel.Dock="Right"
+                               HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Style="{StaticResource PageHint}" Margin="8,0,0,0"/>
+                </DockPanel>
+
+                <ListView x:Name="PreviewList" Grid.Row="1" Margin="0,8,0,0"
+                          Background="Transparent" BorderThickness="0"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="执行" Width="44">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                  HorizontalAlignment="Center"
+                                                  Checked="RowCheck_Changed"
+                                                  Unchecked="RowCheck_Changed"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="原名" Width="160"
+                                            DisplayMemberBinding="{Binding OldName}"/>
+                            <GridViewColumn Header="新名" Width="160"
+                                            DisplayMemberBinding="{Binding NewName}"/>
+                            <GridViewColumn Header="状态" Width="170">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Status}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3" Margin="0,14,0,0">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                <Button x:Name="UndoButton" Content="撤销上次重命名"
+                        IsEnabled="False" Click="Undo_Click"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="RenameButton" Content="开始重命名" Width="108"
+                        IsDefault="True" IsEnabled="False" Click="Rename_Click"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>

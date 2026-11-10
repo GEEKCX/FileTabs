@@ -1929,11 +1929,53 @@ public partial class MainWindow : FluentWindow
 
     private void ExtensionsButton_Click(object sender, RoutedEventArgs e)
     {
-        var window = new ExtensionsWindow(CurrentFolderPath()) { Owner = this };
-        if (window.ShowDialog() == true && window.CreatedFolderPath is { } path)
+        var window = new ExtensionsWindow(BuildExtensionsContext()) { Owner = this };
+        window.ShowDialog();
+
+        if (window.RequestedOpenPath is { } path)
         {
             OpenPathInNewTab(path);
         }
+        else if (window.RefreshRequested &&
+                 _active is { } tab && tab.CurrentLocation is { } location)
+        {
+            RefreshTab(tab, location);
+        }
+    }
+
+    /// <summary>
+    /// 扩展中心打开时的一次性快照。Selection COM 读取可能因视图销毁
+    /// 抛异常；此时把选中项当作空，目录仍可用。
+    /// </summary>
+    private ExtensionsContext BuildExtensionsContext()
+    {
+        var selectedPaths = new List<string>();
+        if (_active?.Browser is { } browser)
+        {
+            try
+            {
+                var selected = browser.SelectedItems;
+                for (var i = 0; i < selected.Count; i++)
+                {
+                    if (selected[i] is ShellObject item &&
+                        !string.IsNullOrWhiteSpace(item.ParsingName) &&
+                        Path.IsPathRooted(item.ParsingName))
+                    {
+                        selectedPaths.Add(item.ParsingName);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or COMException)
+            {
+                AppStorage.Log($"Extensions selection snapshot failed: {ex.Message}");
+            }
+        }
+
+        return new ExtensionsContext
+        {
+            CurrentFolder = CurrentFolderPath(),
+            SelectedPaths = selectedPaths,
+        };
     }
 
     private void SyncToolbarMenuState()

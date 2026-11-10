@@ -43,6 +43,23 @@ public sealed class RecentLocation
     public DateTime VisitedAt { get; set; }
 }
 
+/// <summary>一次批量重命名中成功执行的一项，用于撤销。</summary>
+public sealed class RenameHistoryItem
+{
+    public string OldPath { get; set; } = "";
+    public string NewPath { get; set; } = "";
+}
+
+/// <summary>
+/// 只保留最近一次批量重命名。撤销后即删除，避免旧记录在文件已经
+/// 被移动或再次改名后误操作。
+/// </summary>
+public sealed class RenameHistory
+{
+    public DateTime At { get; set; }
+    public List<RenameHistoryItem> Items { get; set; } = new();
+}
+
 /// <summary>
 /// App-wide user settings. Current is a lazy singleton: loaded once on first
 /// access, then treated as the authoritative in-memory state for the process.
@@ -293,6 +310,52 @@ public static class AppStorage
         {
             Log($"SaveFolderTemplates failed: {ex.Message}");
             return false;
+        }
+    }
+
+    public static string RenameHistoryPath =>
+        Path.Combine(DataDirectory, "rename-history.json");
+
+    public static RenameHistory? LoadRenameHistory()
+    {
+        var file = RenameHistoryPath;
+        if (!File.Exists(file)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<RenameHistory>(File.ReadAllText(file), JsonOptions);
+        }
+        catch (JsonException)
+        {
+            ArchiveCorruptFile(file);
+            Log("rename-history.json is corrupt; ignored.");
+            return null;
+        }
+    }
+
+    public static bool SaveRenameHistory(RenameHistory history)
+    {
+        try
+        {
+            WriteFileAtomically(RenameHistoryPath,
+                JsonSerializer.Serialize(history, JsonOptions));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"SaveRenameHistory failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    public static void ClearRenameHistory()
+    {
+        try
+        {
+            if (File.Exists(RenameHistoryPath)) File.Delete(RenameHistoryPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"ClearRenameHistory failed: {ex.Message}");
         }
     }
 

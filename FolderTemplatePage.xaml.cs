@@ -10,7 +10,7 @@ namespace FileTabs;
 /// <summary>
 /// 目录模板功能页面：由旧的单功能 ExtensionsWindow 整体迁移而来，
 /// 逻辑保持不变，只是宿主从 Window 变成了 UserControl。
-/// 创建成功后把结果写到 owner.CreatedFolderPath 供 MainWindow 打开新标签。
+/// 创建成功后把结果写到 owner.RequestedOpenPath 供 MainWindow 打开新标签。
 /// </summary>
 public partial class FolderTemplatePage : UserControl
 {
@@ -204,7 +204,7 @@ public partial class FolderTemplatePage : UserControl
             {
                 FolderTemplateService.CreateFolders(plan);
             }
-            _owner.CreatedFolderPath = planSet.Plans[0].Folders[0].FullPath;
+            _owner.RequestedOpenPath = planSet.Plans[0].Folders[0].FullPath;
             _owner.DialogResult = true;
             _owner.Close();
         }

@@ -1,0 +1,108 @@
+<UserControl x:Class="FileTabs.FolderInventoryPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style x:Key="PageCard" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource FileTabs.SettingsCardBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource FileTabs.SettingsCardBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="16"/>
+        </Style>
+
+        <Style x:Key="SectionTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
+        <Style x:Key="PageHint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="12"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Style="{StaticResource PageCard}">
+            <StackPanel>
+                <TextBlock Text="目录清单" Style="{StaticResource SectionTitle}"/>
+                <TextBlock x:Name="FolderText" Style="{StaticResource PageHint}"/>
+
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <TextBlock Text="格式" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <ComboBox x:Name="FormatCombo" Width="176" Height="32"
+                              SelectedIndex="0" VerticalContentAlignment="Center">
+                        <ComboBoxItem Content="CSV（Excel 表格）" Tag="csv"/>
+                        <ComboBoxItem Content="Markdown 表格" Tag="md"/>
+                        <ComboBoxItem Content="JSON" Tag="json"/>
+                    </ComboBox>
+                    <CheckBox x:Name="RecursiveCheck" Content="包含子目录"
+                              IsChecked="True" Margin="20,0,0,0" VerticalAlignment="Center"/>
+                    <CheckBox x:Name="IncludeFoldersCheck" Content="包含文件夹"
+                              IsChecked="True" Margin="16,0,0,0" VerticalAlignment="Center"/>
+                    <CheckBox x:Name="IncludeFilesCheck" Content="包含文件"
+                              IsChecked="True" Margin="16,0,0,0" VerticalAlignment="Center"/>
+                    <CheckBox x:Name="IncludeHiddenCheck" Content="包含隐藏项"
+                              Margin="16,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <TextBlock Text="CSV 适合 Excel 核对，Markdown 适合贴进文档，JSON 适合脚本处理；大小按字节写入 CSV/JSON，Markdown 使用可读单位。"
+                           Style="{StaticResource PageHint}"/>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="2" Style="{StaticResource PageCard}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <DockPanel>
+                    <TextBlock Text="扫描结果" Style="{StaticResource SectionTitle}"/>
+                    <TextBlock x:Name="ScanStatusText" DockPanel.Dock="Right"
+                               HorizontalAlignment="Right" VerticalAlignment="Center"
+                               Style="{StaticResource PageHint}" Margin="8,0,0,0"/>
+                </DockPanel>
+
+                <ProgressBar x:Name="ScanProgress" Grid.Row="1" Height="3"
+                             Margin="0,8,0,0" IsIndeterminate="True"
+                             Visibility="Collapsed"/>
+
+                <ListView x:Name="PreviewList" Grid.Row="2" Margin="0,8,0,0"
+                          Background="Transparent" BorderThickness="0"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="相对路径" Width="320"
+                                            DisplayMemberBinding="{Binding Path}"/>
+                            <GridViewColumn Header="大小" Width="80"
+                                            DisplayMemberBinding="{Binding SizeText}"/>
+                            <GridViewColumn Header="修改时间" Width="130"
+                                            DisplayMemberBinding="{Binding ModifiedText}"/>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3" Margin="0,14,0,0">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                <Button x:Name="CancelButton" Content="取消扫描"
+                        Visibility="Collapsed" Click="Cancel_Click"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="ExportButton" Content="导出…" Width="108"
+                        IsDefault="True" Click="Export_Click"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>
