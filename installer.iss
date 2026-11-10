@@ -1,7 +1,7 @@
 ; Inno Setup script for FileTabs per-user install.
 
 #define MyAppName "FileTabs"
-#define MyAppVersion "1.2.2"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "GEEKCX"
 #define MyAppExeName "FileTabs.exe"
 
