@@ -46,9 +46,12 @@ public partial class MainWindow : FluentWindow
     private Bookmark? _dragBookmark;
     private bool _isDraggingBookmark;
     private bool _isClosing;
+    // Keeps session.json small; only the most recent entries are reopenable.
+    private const int RecentlyClosedLimit = 50;
     private List<string> _recentlyClosed = new();
     private bool _everythingAvailable = true;
     private DispatcherTimer? _sessionSaveTimer;
+    private bool _statusBarUpdateQueued;
     private Rect _normalWindowBounds;
     // Size-move loop state: a border drag resizes the shell view on every
     // tick, so the body is hidden until the drag ends (see WndProcHook).
@@ -62,6 +65,9 @@ public partial class MainWindow : FluentWindow
     private bool _isAddressEditing;
     private bool _isApplyingAppearanceSettings;
     private readonly DispatcherTimer _breadcrumbNavTimer = new() { Interval = TimeSpan.FromMilliseconds(250) };
+    // History is rewritten on every navigation; throttle it so the UI thread
+    // does not serialize the whole list for each folder change.
+    private readonly DispatcherTimer _historySaveTimer = new() { Interval = TimeSpan.FromSeconds(1) };
     private readonly DispatcherTimer _tabLoadingWatchdog = new() { Interval = TimeSpan.FromSeconds(3) };
     // Polls the left button while a size-move loop is running; some drags end
     // without WM_EXITSIZEMOVE and must not leave the body collapsed.
@@ -75,6 +81,10 @@ public partial class MainWindow : FluentWindow
     private DateTime _addressEditEnteredAt;
     private bool _addressOpenedByBreadcrumbClick;
     private string _addressDisplayText = string.Empty;
+    // Reading the OLE clipboard can stall while another process owns it;
+    // only open it again after the clipboard sequence number changes.
+    private static uint _lastClipboardSequence;
+    private static bool _lastClipboardHasFiles;
 
     public MainWindow()
     {
@@ -114,6 +124,7 @@ public partial class MainWindow : FluentWindow
 
         ProbeEverythingAvailability();
         _breadcrumbNavTimer.Tick += (_, _) => NavigatePendingBreadcrumb();
+        _historySaveTimer.Tick += (_, _) => FlushRecentLocations();
         _tabLoadingWatchdog.Tick += (_, _) => HandleTabLoadingTimeout();
         _sizeMoveWatchdog.Tick += (_, _) => HandleSizeMoveWatchdog();
         // Coalesce rapid save triggers (navigation, tab switch, drag, close).
@@ -216,6 +227,9 @@ public partial class MainWindow : FluentWindow
     private const double TabStripLeftInset = 8;
     private const double MenuButtonSlotWidth = 34;   // menu button 30 + right margin 4
     private const double NewTabButtonSlotWidth = 30; // new-tab button 28 + left margin 2
+    // Keep a bare patch of title bar next to the new-tab button so the window
+    // can still be dragged when the tab strip is full.
+    private const double TitleBarDragZoneWidth = 96;
     private const double TabMinWidth = 64;
     private const double TabMaxWidth = 240;
 
@@ -257,7 +271,8 @@ public partial class MainWindow : FluentWindow
     {
         var tabBarWidth = TabBar.ActualWidth;
         if (tabBarWidth <= 0) return;
-        var stripSpace = tabBarWidth - MenuButtonSlotWidth - NewTabButtonSlotWidth;
+        var stripSpace =
+            tabBarWidth - MenuButtonSlotWidth - NewTabButtonSlotWidth - TitleBarDragZoneWidth;
         if (stripSpace <= 0) return;
 
         var count = Math.Max(1, _tabs.Count);
@@ -589,9 +604,8 @@ public partial class MainWindow : FluentWindow
         tab.SelectionStateChanged += (_, _) =>
         {
             if (!ReferenceEquals(_active, tab)) return;
-            UpdateStatusBar();
-            SyncViewMenuChecks();
             UpdateRenameButton();
+            QueueStatusBarUpdate();
         };
         // Alt+Left / Alt+Right typed inside the native shell view; the WPF
         // key path cannot see those because the HwndHost owns the focus.
@@ -1216,10 +1230,11 @@ public partial class MainWindow : FluentWindow
         _recentlyClosed.Clear();
         if (session is { } loadedSession)
         {
-            foreach (var p in loadedSession.RecentlyClosed.Where(p => !string.IsNullOrWhiteSpace(p)))
-            {
-                _recentlyClosed.Insert(0, p);
-            }
+            // The file is newest-first; keep that order so ReopenClosedTab
+            // takes the most recently closed one after a restart.
+            _recentlyClosed.AddRange(loadedSession.RecentlyClosed
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Take(RecentlyClosedLimit));
         }
 
         var paths = session?.Tabs ?? new List<string>();
@@ -1289,6 +1304,11 @@ public partial class MainWindow : FluentWindow
         _recentlyClosed.RemoveAll(p =>
             string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
         _recentlyClosed.Insert(0, path);
+        if (_recentlyClosed.Count > RecentlyClosedLimit)
+        {
+            _recentlyClosed.RemoveRange(
+                RecentlyClosedLimit, _recentlyClosed.Count - RecentlyClosedLimit);
+        }
         MarkSessionDirty();
     }
 
@@ -1317,6 +1337,12 @@ public partial class MainWindow : FluentWindow
     private void FlushSessionBeforeClose()
     {
         StopSessionSaveTimer();
+        if (_historySaveTimer.IsEnabled)
+        {
+            // SaveCurrentSession waits for every queued write, including this
+            // one, so the last navigation still lands before the process exits.
+            FlushRecentLocations();
+        }
         SaveCurrentSession(synchronous: true);
     }
 
@@ -1609,13 +1635,27 @@ public partial class MainWindow : FluentWindow
 
     private static bool ClipboardHasFiles()
     {
+        // GetClipboardSequenceNumber is a cheap query; it returns 0 when the
+        // clipboard is unavailable, in which case the result must not be cached.
+        var sequence = GetClipboardSequenceNumber();
+        if (sequence != 0 && sequence == _lastClipboardSequence)
+        {
+            return _lastClipboardHasFiles;
+        }
         try
         {
-            return Clipboard.ContainsFileDropList();
+            var hasFiles = Clipboard.ContainsFileDropList();
+            if (sequence != 0)
+            {
+                _lastClipboardSequence = sequence;
+                _lastClipboardHasFiles = hasFiles;
+            }
+            return hasFiles;
         }
         catch (ExternalException)
         {
-            // Clipboard is momentarily locked by another process.
+            // Clipboard is momentarily locked by another process; leave the
+            // cache untouched so the next check retries.
             return false;
         }
     }
@@ -2030,73 +2070,72 @@ public partial class MainWindow : FluentWindow
     {
         if (_active is not { } tab || tab.Browser is not { } browser)
         {
-            StatusBar.Visibility = Visibility.Collapsed;
-            StatusText.Text = string.Empty;
-            StatusHintText.Text = string.Empty;
+            HideStatusBar();
             return;
         }
         try
         {
-            var items = browser.Items;
             var selected = browser.SelectedItems;
             var selectedCount = selected.Count;
-            var folders = 0;
-            var selectedFolderPaths = new List<string>();
-            var allFolders = true;
-            for (var i = 0; i < selectedCount; i++)
-            {
-                if (selected[i] is not { } item)
-                {
-                    allFolders = false;
-                    break;
-                }
-                if (item is ShellFolder)
-                {
-                    folders++;
-                    var parsing = item.ParsingName;
-                    if (!string.IsNullOrWhiteSpace(parsing) && Path.IsPathRooted(parsing))
-                    {
-                        selectedFolderPaths.Add(parsing);
-                    }
-                    continue;
-                }
-                // The custom bar only shows for an all-folder selection (the
-                // shell status bar covers sizes), so the first non-folder item
-                // decides the outcome. Stop touching the shell collection —
-                // Ctrl+A over thousands of files used to pay one COM property
-                // read per item on the UI thread just to hide the bar.
-                allFolders = false;
-                break;
-            }
-            var totalCount = items.Count;
             // The shell status bar already covers the common cases: total item
             // count, item size and "N selected". Keep FileTabs' bar only when
             // the selection is entirely folders; that child count is the one
-            // aggregate the native view does not show.
-            if (selectedCount == 0 || !allFolders)
+            // aggregate the native view does not show. Stop at the first
+            // non-folder so Ctrl+A never reads Size (a Shell COM call per
+            // item) or enumerates the folder just to hide the bar again.
+            if (selectedCount == 0)
             {
-                StatusBar.Visibility = Visibility.Collapsed;
-                StatusText.Text = string.Empty;
-                StatusHintText.Text = string.Empty;
+                HideStatusBar();
+                return;
             }
-            else
+            var selectedFolderPaths = new List<string>();
+            for (var i = 0; i < selectedCount; i++)
             {
-                StatusBar.Visibility = Visibility.Visible;
-                StatusText.Text = $"已选择 {selectedCount} 个项目";
-                StatusHintText.Text = folders > 0
-                    ? $"{totalCount} 个项目 · 含 {folders} 个文件夹"
-                    : $"{totalCount} 个项目";
-                BeginFolderSizeSummary(selectedFolderPaths);
+                if (selected[i] is not ShellFolder folder)
+                {
+                    HideStatusBar();
+                    return;
+                }
+                var parsing = folder.ParsingName;
+                if (!string.IsNullOrWhiteSpace(parsing) && Path.IsPathRooted(parsing))
+                {
+                    selectedFolderPaths.Add(parsing);
+                }
             }
+            // Items.Count enumerates every item in the folder; only this
+            // all-folders branch needs it.
+            var totalCount = browser.Items.Count;
+            StatusBar.Visibility = Visibility.Visible;
+            StatusText.Text = $"已选择 {selectedCount} 个项目";
+            StatusHintText.Text = $"{totalCount} 个项目 · 含 {selectedCount} 个文件夹";
+            BeginFolderSizeSummary(selectedFolderPaths);
         }
         catch (Exception ex) when (ex is InvalidOperationException or COMException)
         {
             // The shell view is mid-navigation and its item collections are
             // not readable yet; the next navigation event refreshes the bar.
-            StatusBar.Visibility = Visibility.Collapsed;
-            StatusText.Text = string.Empty;
-            StatusHintText.Text = string.Empty;
+            HideStatusBar();
         }
+    }
+
+    private void HideStatusBar()
+    {
+        StatusBar.Visibility = Visibility.Collapsed;
+        StatusText.Text = string.Empty;
+        StatusHintText.Text = string.Empty;
+    }
+
+    // Rubber-band selection raises one event per item; coalesce them into a
+    // single pass after the shell has settled.
+    private void QueueStatusBarUpdate()
+    {
+        if (_statusBarUpdateQueued) return;
+        _statusBarUpdateQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+        {
+            _statusBarUpdateQueued = false;
+            UpdateStatusBar();
+        }));
     }
 
     private static string FormatByteSize(ulong size)
@@ -2384,9 +2423,15 @@ public partial class MainWindow : FluentWindow
     private void TabStripBackground_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
+        // Only the bare strip background belongs to this handler; tabs, the
+        // menu and the new-tab button bubble their own visuals.
+        if (!ReferenceEquals(e.OriginalSource, TabBar)) return;
+
         if (e.ClickCount == 2)
         {
-            AddTab(AppSettings.Current.NewTabPath);
+            WindowState = WindowState == WindowState.Maximized
+                ? WindowState.Normal
+                : WindowState.Maximized;
             e.Handled = true;
             return;
         }
@@ -2395,11 +2440,8 @@ public partial class MainWindow : FluentWindow
         // screen, which leaves WPF-UI's TitleBar with no HTCAPTION area to drag
         // (it treats the entire Header as content). Arm a drag on the bare
         // background only; tabs, the menu and the new-tab button keep theirs.
-        if (e.ClickCount == 1 && ReferenceEquals(e.OriginalSource, TabBar))
-        {
-            _titleBarDragStart = e.GetPosition(this);
-            _isTitleBarDragArmed = true;
-        }
+        _titleBarDragStart = e.GetPosition(this);
+        _isTitleBarDragArmed = true;
     }
 
     private bool TryStartTitleBarDrag(System.Windows.Input.MouseEventArgs e)
@@ -2777,6 +2819,9 @@ public partial class MainWindow : FluentWindow
     private const int VkShiftKey = 0x10;
 
     [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
+
+    [DllImport("user32.dll")]
     private static extern short GetKeyState(int virtualKey);
 
     // Chrome-style access history: navigation events are coalesced so fast
@@ -2798,72 +2843,216 @@ public partial class MainWindow : FluentWindow
             string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
         _recentLocations.Insert(0, new RecentLocation { Path = path, VisitedAt = DateTime.Now });
         if (_recentLocations.Count > 500) _recentLocations.RemoveRange(500, _recentLocations.Count - 500);
-        AppStorage.SaveRecentLocationsAsync(_recentLocations);
-        RefreshRecentLocationsDropdown();
+        // At most one write per second; the popup rebuilds on open instead of
+        // on every navigation.
+        if (!_historySaveTimer.IsEnabled) _historySaveTimer.Start();
+        if (RecentLocationsPopup.IsOpen) RefreshRecentLocationsDropdown();
         if (HistoryPanel.Visibility == Visibility.Visible) RefreshHistoryPage();
+    }
+
+    private void FlushRecentLocations()
+    {
+        _historySaveTimer.Stop();
+        AppStorage.SaveRecentLocationsAsync(_recentLocations);
     }
 
     // ---------- Everything search ----------
 
     private CancellationTokenSource? _searchCts;
 
+    // The SDK has one global query state behind a lock and its native query
+    // cannot be canceled. A single worker owns that state and only ever runs
+    // the newest request; one Task.Run per keystroke let superseded queries
+    // pile up behind a slow one and delay the query the user is waiting for.
+    private readonly object _searchGate = new();
+    private readonly SemaphoreSlim _searchWake = new(0, 1);
+    private string? _pendingSearchQuery;
+    private EverythingClient.SortMode _pendingSearchSort;
+    private int _searchVersion;
+    private bool _searchSignaled;
+    private Task? _searchWorker;
+
     private void SearchBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
         _searchCts?.Cancel();
-        _searchCts = new CancellationTokenSource();
-        var token = _searchCts.Token;
         var query = SearchBox.Text.Trim();
 
         if (query.Length == 0)
         {
+            _searchCts = null;
+            CancelPendingSearch();
             SearchResults.ItemsSource = null;
             CloseSearchPanel();
             return;
         }
 
-        _ = Task.Run(async () =>
+        var cts = new CancellationTokenSource();
+        _searchCts = cts;
+        var sort = _searchSort;
+        _ = QueueSearchAsync(query, sort, cts);
+    }
+
+    private async Task QueueSearchAsync(
+        string query, EverythingClient.SortMode sort, CancellationTokenSource cts)
+    {
+        try
         {
+            await Task.Delay(150, cts.Token);
+            RequestSearch(query, sort);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (ReferenceEquals(_searchCts, cts)) _searchCts = null;
+            cts.Dispose();
+        }
+    }
+
+    private void RequestSearch(string query, EverythingClient.SortMode sort)
+    {
+        lock (_searchGate)
+        {
+            _pendingSearchQuery = query;
+            _pendingSearchSort = sort;
+            _searchVersion++;
+            if (!_searchSignaled)
+            {
+                _searchSignaled = true;
+                _searchWake.Release();
+            }
+            _searchWorker ??= Task.Run(SearchWorkerLoopAsync);
+        }
+    }
+
+    private void CancelPendingSearch()
+    {
+        lock (_searchGate)
+        {
+            _pendingSearchQuery = null;
+            _searchVersion++;
+        }
+    }
+
+    private async Task SearchWorkerLoopAsync()
+    {
+        while (true)
+        {
+            await _searchWake.WaitAsync().ConfigureAwait(false);
+
+            string query;
+            EverythingClient.SortMode sort;
+            int version;
+            lock (_searchGate)
+            {
+                _searchSignaled = false;
+                if (_pendingSearchQuery is null) continue;
+                query = _pendingSearchQuery;
+                sort = _pendingSearchSort;
+                version = _searchVersion;
+                _pendingSearchQuery = null;
+            }
+
+            List<EverythingSearchResult>? results = null;
+            string? error = null;
+            var timedOut = false;
+            // Two-second ceiling for the display; the native query cannot be
+            // canceled, so let it finish to release the SDK gate, then just
+            // report the timeout.
+            var searchTask = Task.Run(() => EverythingClient.Search(query, 100, sort: sort));
+            if (await Task.WhenAny(searchTask, Task.Delay(2000)).ConfigureAwait(false) == searchTask)
+            {
+                try
+                {
+                    results = await searchTask.ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                }
+            }
+            else
+            {
+                timedOut = true;
+                // Show the timeout now; the native query cannot be canceled and
+                // may run for a long time. Waiting for it before painting the
+                // hint left the previous query's results on screen.
+                try
+                {
+                    await ShowSearchTimeoutAsync(query, version).ConfigureAwait(false);
+                }
+                catch (TaskCanceledException)
+                {
+                    return; // The dispatcher is shutting down.
+                }
+                try
+                {
+                    await searchTask.ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // The timeout is the user-visible outcome.
+                }
+            }
+
+            int currentVersion;
+            lock (_searchGate) currentVersion = _searchVersion;
+            if (version != currentVersion) continue;
+            if (timedOut) continue; // already shown before awaiting the native query
+
             try
             {
-                await Task.Delay(150, token);
-                var sort = _searchSort;
-                // Two-second ceiling for the display update; the native query
-                // may keep running underneath but we no longer block the panel.
-                var searchTask = Task.Run(() => EverythingClient.Search(query, 100, sort: sort), token);
-                var completed = await Task.WhenAny(searchTask, Task.Delay(2000, token));
-                var results = completed == searchTask ? await searchTask : null;
                 await Dispatcher.InvokeAsync(() =>
                 {
-                    if (token.IsCancellationRequested) return;
-                    if (results is null)
+                    lock (_searchGate)
                     {
-                        SearchResultCount.Text = "0 个结果";
-                        SearchHintText.Text = "Everything 搜索超时";
+                        if (version != _searchVersion) return;
+                    }
+                    if (!string.Equals(SearchBox.Text.Trim(), query, StringComparison.Ordinal)) return;
+                    if (error is not null)
+                    {
+                        SearchHintText.Text = error;
                         SearchHintPopup.IsOpen = true;
                         SearchResults.ItemsSource = null;
                         OpenSearchPanel();
-                        return;
                     }
-                    SearchResults.ItemsSource = results;
-                    SearchResultCount.Text = $"{results.Count} 个结果";
-                    OpenSearchPanel();
-                    if (SearchResults.Items.Count > 0) SearchResults.SelectedIndex = 0;
+                    else
+                    {
+                        SearchResults.ItemsSource = results;
+                        SearchResultCount.Text = $"{results!.Count} 个结果";
+                        OpenSearchPanel();
+                        if (SearchResults.Items.Count > 0) SearchResults.SelectedIndex = 0;
+                    }
                 });
             }
-            catch (OperationCanceledException)
+            catch (TaskCanceledException)
             {
+                return; // The dispatcher is shutting down.
             }
-            catch (Exception ex)
+        }
+    }
+
+    /// <summary>
+    /// Paint the timeout for the newest request only. The worker may still be
+    /// waiting on an older native query, so this must not be tied to that
+    /// query finishing.
+    /// </summary>
+    private async Task ShowSearchTimeoutAsync(string query, int version)
+    {
+        await Dispatcher.InvokeAsync(() =>
+        {
+            lock (_searchGate)
             {
-                await Dispatcher.InvokeAsync(() =>
-                {
-                    if (token.IsCancellationRequested) return;
-                    SearchHintText.Text = ex.Message; SearchHintPopup.IsOpen = true;
-                    SearchResults.ItemsSource = null;
-                    OpenSearchPanel();
-                });
+                if (version != _searchVersion) return;
             }
-        }, token);
+            if (!string.Equals(SearchBox.Text.Trim(), query, StringComparison.Ordinal)) return;
+            SearchResultCount.Text = "0 个结果";
+            SearchHintText.Text = "Everything 搜索超时";
+            SearchHintPopup.IsOpen = true;
+            SearchResults.ItemsSource = null;
+            OpenSearchPanel();
+        });
     }
 
     private void SearchBox_KeyDown(object sender, KeyEventArgs e)
@@ -3190,7 +3379,27 @@ public partial class MainWindow : FluentWindow
 
     private sealed record AddressSuggestion(string Name, string Path, bool IsFolder);
 
+    private sealed record AddressDirectoryEntry(string FullName, string Name, bool IsFolder);
+
+    private sealed record AddressDirectoryCacheEntry(
+        long CreatedAt, IReadOnlyList<AddressDirectoryEntry> Entries);
+
     private const int MaxAddressSuggestions = 14;
+    // Suggestions are best-effort: stop scanning unusually large folders
+    // instead of stalling the background task on every keystroke.
+    private const int MaxAddressDirectoryScan = 5000;
+    private const long MaxAddressScanMilliseconds = 150;
+    // Reuse a directory listing across keystrokes; autocomplete tolerates a
+    // few seconds of staleness, and the same parent is scanned repeatedly
+    // while the user narrows a name. Oversized listings are not cached so a
+    // handful of huge folders cannot pin a large amount of memory.
+    private const int AddressDirectoryCacheLimit = 8;
+    private const int AddressDirectoryCacheMaxEntries = 1000;
+    private static readonly long AddressDirectoryCacheLifetimeMs =
+        (long)TimeSpan.FromSeconds(4).TotalMilliseconds;
+    private static readonly object AddressDirectoryCacheGate = new();
+    private static readonly Dictionary<string, AddressDirectoryCacheEntry> AddressDirectoryCache =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private void QueueAddressSuggestions(bool immediate = false)
     {
@@ -3323,7 +3532,10 @@ public partial class MainWindow : FluentWindow
 
         string? directory;
         string prefix;
-        if (EndsWithDirectorySeparator(query))
+        // A trailing separator means the user is picking a folder; files can
+        // never match, so skip them entirely.
+        var directoriesOnly = EndsWithDirectorySeparator(query);
+        if (directoriesOnly)
         {
             directory = query;
             prefix = string.Empty;
@@ -3335,23 +3547,97 @@ public partial class MainWindow : FluentWindow
         }
         if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) return;
 
+        var entries = GetAddressDirectoryEntries(directory, token);
         var directories = new List<string>();
         var files = new List<string>();
+        // One pass over the listing: prefix filtering is cheap, and the
+        // entries came from a single directory scan that already proved they
+        // exist.
+        foreach (var entry in entries)
+        {
+            token.ThrowIfCancellationRequested();
+            if (directoriesOnly && !entry.IsFolder) continue;
+            if (!entry.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            if (entry.IsFolder)
+            {
+                if (directories.Count < MaxAddressSuggestions) directories.Add(entry.FullName);
+            }
+            else if (files.Count < MaxAddressSuggestions)
+            {
+                files.Add(entry.FullName);
+            }
+            if (directories.Count >= MaxAddressSuggestions
+                && (directoriesOnly || files.Count >= MaxAddressSuggestions))
+            {
+                break;
+            }
+        }
+
+        foreach (var path in directories.OrderBy(
+                     path => Path.GetFileName(path),
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            if (results.Count >= MaxAddressSuggestions) return;
+            AddExistingSuggestion(results, path, isFolder: true);
+        }
+        foreach (var path in files.OrderBy(
+                     path => Path.GetFileName(path),
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            if (results.Count >= MaxAddressSuggestions) return;
+            AddExistingSuggestion(results, path, isFolder: false);
+        }
+    }
+
+    private static IReadOnlyList<AddressDirectoryEntry> GetAddressDirectoryEntries(
+        string directory, CancellationToken token)
+    {
+        string key;
         try
         {
-            foreach (var path in Directory.EnumerateDirectories(directory))
+            key = Path.GetFullPath(directory);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            key = directory;
+        }
+
+        var now = Environment.TickCount64;
+        lock (AddressDirectoryCacheGate)
+        {
+            if (AddressDirectoryCache.TryGetValue(key, out var cached)
+                && now - cached.CreatedAt <= AddressDirectoryCacheLifetimeMs)
             {
-                token.ThrowIfCancellationRequested();
-                if (!FileNameStartsWith(path, prefix)) continue;
-                directories.Add(path);
-                if (directories.Count >= MaxAddressSuggestions) break;
+                return cached.Entries;
             }
-            foreach (var path in Directory.EnumerateFiles(directory))
+        }
+
+        var entries = new List<AddressDirectoryEntry>();
+        // A capped scan must not be cached as if it were the full listing:
+        // an entry past the cutoff would then stay invisible for the cache
+        // lifetime, and every rescan would stop at the same place.
+        var truncated = false;
+        try
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var scanned = 0;
+            foreach (var info in new DirectoryInfo(directory).EnumerateFileSystemInfos())
             {
                 token.ThrowIfCancellationRequested();
-                if (!FileNameStartsWith(path, prefix)) continue;
-                files.Add(path);
-                if (files.Count >= MaxAddressSuggestions) break;
+                if (scanned >= MaxAddressDirectoryScan)
+                {
+                    truncated = true;
+                    break;
+                }
+                scanned++;
+                if ((scanned & 0x7F) == 0
+                    && stopwatch.ElapsedMilliseconds >= MaxAddressScanMilliseconds)
+                {
+                    truncated = true;
+                    break;
+                }
+                entries.Add(new AddressDirectoryEntry(
+                    info.FullName, info.Name, info is DirectoryInfo));
             }
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException
@@ -3361,35 +3647,32 @@ public partial class MainWindow : FluentWindow
             or NotSupportedException)
         {
             // A protected or disconnected directory should never break typing.
+            // A partial listing is still useful for this keystroke, but must
+            // not be cached as complete.
+            truncated = true;
         }
 
-        foreach (var path in directories.OrderBy(
-                     path => Path.GetFileName(path),
-                     StringComparer.OrdinalIgnoreCase))
+        if (!truncated && entries.Count <= AddressDirectoryCacheMaxEntries)
         {
-            if (results.Count >= MaxAddressSuggestions) return;
-            AddSuggestion(results, path);
+            lock (AddressDirectoryCacheGate)
+            {
+                if (AddressDirectoryCache.Count >= AddressDirectoryCacheLimit)
+                {
+                    var oldestKey = AddressDirectoryCache
+                        .OrderBy(pair => pair.Value.CreatedAt)
+                        .First().Key;
+                    AddressDirectoryCache.Remove(oldestKey);
+                }
+                AddressDirectoryCache[key] = new AddressDirectoryCacheEntry(now, entries);
+            }
         }
-        foreach (var path in files.OrderBy(
-                     path => Path.GetFileName(path),
-                     StringComparer.OrdinalIgnoreCase))
-        {
-            if (results.Count >= MaxAddressSuggestions) return;
-            AddSuggestion(results, path);
-        }
+        return entries;
     }
 
     private static bool EndsWithDirectorySeparator(string path)
     {
         return path.EndsWith(Path.DirectorySeparatorChar)
             || path.EndsWith(Path.AltDirectorySeparatorChar);
-    }
-
-    private static bool FileNameStartsWith(string path, string prefix)
-    {
-        if (prefix.Length == 0) return true;
-        var name = Path.GetFileName(path);
-        return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsAddressPathMatch(string path, string query)
@@ -3415,9 +3698,36 @@ public partial class MainWindow : FluentWindow
             return;
         }
         if (results.Any(s => string.Equals(s.Path, normalized, StringComparison.OrdinalIgnoreCase))) return;
-        if (!Directory.Exists(normalized) && !File.Exists(normalized)) return;
-
         var isFolder = Directory.Exists(normalized);
+        if (!isFolder && !File.Exists(normalized)) return;
+
+        var trimmed = normalized.TrimEnd(Path.DirectorySeparatorChar);
+        var name = Path.GetFileName(trimmed);
+        results.Add(new AddressSuggestion(
+            string.IsNullOrEmpty(name) ? normalized : name,
+            normalized,
+            isFolder));
+    }
+
+    // Path came from a directory listing, so it is known to exist; the extra
+    // Exists calls AddSuggestion makes would be redundant filesystem hits.
+    private static void AddExistingSuggestion(
+        List<AddressSuggestion> results,
+        string path,
+        bool isFolder)
+    {
+        if (results.Count >= MaxAddressSuggestions || string.IsNullOrEmpty(path)) return;
+        string normalized;
+        try
+        {
+            normalized = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return;
+        }
+        if (results.Any(s => string.Equals(s.Path, normalized, StringComparison.OrdinalIgnoreCase))) return;
+
         var trimmed = normalized.TrimEnd(Path.DirectorySeparatorChar);
         var name = Path.GetFileName(trimmed);
         results.Add(new AddressSuggestion(

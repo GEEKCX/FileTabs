@@ -49,9 +49,11 @@ public sealed class BrowserTab : INotifyPropertyChanged
 
     /// <summary>
     /// Raised after navigation or item changes; the handler re-reads
-    /// <see cref="Browser"/>.SelectedItems. This fires while the shell view
-    /// still holds its selection, so refreshing after the event dispatcher
-    /// drains would see an empty collection.
+    /// <see cref="Browser"/>.SelectedItems. That property queries the live
+    /// shell view, but each access disposes the collection returned by the
+    /// previous one, so handlers must re-read it rather than keep the
+    /// collection from the event. Deferring the read (e.g. to a background
+    /// dispatcher pass) is fine.
     /// </summary>
     public event EventHandler? SelectionStateChanged;
 

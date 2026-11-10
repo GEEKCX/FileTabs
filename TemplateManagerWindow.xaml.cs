@@ -257,7 +257,12 @@ public partial class TemplateManagerWindow : Window
             _editingOriginal.Name.Split(Path.GetInvalidFileNameChars(),
                 StringSplitOptions.RemoveEmptyEntries));
         if (safeName.Length == 0) safeName = "模板";
-        var defaultName = $"{safeName}-1.2.0.json";
+        // Keep the suggested filename in sync with the assembly version; a
+        // hardcoded release number goes stale on every bump.
+        var version = typeof(TemplateManagerWindow).Assembly.GetName().Version;
+        var defaultName = version is null
+            ? $"{safeName}.json"
+            : $"{safeName}-{version.Major}.{version.Minor}.{version.Build}.json";
 
         var dialog = new Microsoft.Win32.SaveFileDialog
         {

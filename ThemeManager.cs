@@ -128,17 +128,28 @@ public static class ThemeManager
     /// Toggle the embedded shell view (Explorer file list) between light and
     /// dark. Uses undocumented but stable uxtheme ordinal 135 plus
     /// the compatible explorer theme; DirectUI needs the per-window opt-in.
+    /// The preferred app mode and menu flush are process-wide, so they only
+    /// run when the light/dark state actually changes; navigation re-applies
+    /// the per-window parts alone.
     /// </summary>
     public static void ApplyShellTheme(IntPtr shellHwnd)
     {
         var dark = IsDarkActive();
         if (shellHwnd == IntPtr.Zero) return;
 
-        SetPreferredAppMode(dark ? PreferredAppModeAllowDark : PreferredAppModeDefault);
-        FlushMenuThemes();
+        if (_preferredAppModeDark != dark)
+        {
+            _preferredAppModeDark = dark;
+            SetPreferredAppMode(dark ? PreferredAppModeAllowDark : PreferredAppModeDefault);
+            FlushMenuThemes();
+        }
         AllowDarkModeForWindow(shellHwnd, dark);
         SetWindowTheme(shellHwnd, dark ? "DarkMode_Explorer" : "Explorer", null);
     }
+
+    // SetPreferredAppMode is process-wide; remember the last value so a view
+    // rebuild does not invalidate every menu theme in the process again.
+    private static bool? _preferredAppModeDark;
 
     /// <summary>
     /// Make WinForms content (the ExplorerBrowser control host) blend into the

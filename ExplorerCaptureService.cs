@@ -173,62 +173,65 @@ public sealed class ExplorerCaptureService : IDisposable
     /// </summary>
     private static string? ResolveExplorerPath(int hwnd, int attempts = 12)
     {
-        for (int i = 0; i < attempts; i++)
-        {
-            var path = TryResolveOnce(hwnd);
-            if (!string.IsNullOrEmpty(path)) return path;
-            Thread.Sleep(80);
-        }
-        return null;
-    }
-
-    private static string? TryResolveOnce(int hwnd)
-    {
         var shellType = Type.GetTypeFromProgID("Shell.Application");
         if (shellType is null) return null;
-        dynamic shell = Activator.CreateInstance(shellType)!;
+        // One shell instance per capture: creating it is the expensive part of
+        // a retry, and shell.Windows() already returns a fresh live collection.
+        object shell = Activator.CreateInstance(shellType)!;
         try
         {
-            dynamic windows = shell.Windows();
-            int count = (int)windows.Count;
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < attempts; i++)
             {
-                dynamic? window = null;
-                try { window = windows.Item(i); }
-                catch (COMException) { continue; }
-                if (window is null) continue;
-                try
-                {
-                    if ((int)window.HWND != hwnd) continue;
-
-                    var url = (string?)window.LocationURL;
-                    if (!string.IsNullOrEmpty(url))
-                    {
-                        if (url.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-                        {
-                            return new Uri(url).LocalPath;
-                        }
-                        return url; // shell:: / ::{GUID} and friends.
-                    }
-
-                    // Virtual folders have an empty LocationURL; fall back to
-                    // the shell path exposed by the folder item (e.g. "::{20D04FE0-...}").
-                    // Late-bound property access can throw anything (the
-                    // RuntimeBinderException is the usual suspect), so catch broadly here.
-                    string? selfPath = null;
-                    try { selfPath = (string?)window.Document.Folder.Self.Path; }
-                    catch (Exception) { /* navigation still in flight */ }
-                    return string.IsNullOrEmpty(selfPath) ? null : selfPath;
-                }
-                finally
-                {
-                    _ = Marshal.FinalReleaseComObject(window);
-                }
+                var path = TryResolveOnce(shell, hwnd);
+                if (!string.IsNullOrEmpty(path)) return path;
+                if (i + 1 < attempts) Thread.Sleep(80);
             }
+            return null;
         }
         finally
         {
             _ = Marshal.FinalReleaseComObject(shell);
+        }
+    }
+
+    private static string? TryResolveOnce(object shellObject, int hwnd)
+    {
+        dynamic shell = shellObject;
+        dynamic windows = shell.Windows();
+        int count = (int)windows.Count;
+        for (int i = 0; i < count; i++)
+        {
+            dynamic? window = null;
+            try { window = windows.Item(i); }
+            catch (COMException) { continue; }
+            if (window is null) continue;
+            try
+            {
+                if ((int)window.HWND != hwnd) continue;
+
+                var url = (string?)window.LocationURL;
+                if (!string.IsNullOrEmpty(url))
+                {
+                    if (url.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return new Uri(url).LocalPath;
+                    }
+                    return url; // shell:: / ::{GUID} and friends.
+                }
+
+                // Virtual folders have an empty LocationURL; fall back to
+                // the shell path exposed by the folder item (e.g. "::{20D04FE0-...}").
+                // Late-bound property access can throw anything (the
+                // RuntimeBinderException is the usual suspect), so catch broadly here.
+                string? selfPath = null;
+                try { selfPath = (string?)window.Document.Folder.Self.Path; }
+                catch (Exception) { /* navigation still in flight */ }
+                return string.IsNullOrEmpty(selfPath) ? null : selfPath;
+            }
+            finally
+            {
+                _ = Marshal.FinalReleaseComObject(window);
+            }
         }
         return null;
     }

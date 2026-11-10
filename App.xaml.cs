@@ -121,6 +121,7 @@ public partial class App : Application
         // save its own empty tab list over it on exit.
         var main = new MainWindow();
         this.MainWindow = main;
+        StartupTiming.Mark("mainwindow-created");
         // 登录自启或显式 --silent 启动都留在后台：窗口照常构建、会话照常恢复，
         // 但不显示，直到有人要它（打开文件夹、Win+E 被接管、或再次启动 exe）。
         if (!IsSilentStartup(e.Args))
@@ -136,20 +137,24 @@ public partial class App : Application
             main.ShowActivated = false;
             main.Show();
             main.Hide();
+            StartupTiming.Mark("window-hidden");
         }
 
         // 托盘常驻：静默启动和手动启动都要有，否则窗口关掉后既找不回程序
         // 也退不出去。拖放中转只是它的一个附加功能。
         DropPoints.EnsurePersistentTray();
+        StartupTiming.Mark("tray-ready");
 
         if (AppSettings.Current.DropPointEnabled)
         {
             DropPoints.Start(main);
         }
+        StartupTiming.Mark("droppoint-started");
 
         // First instance: listen for paths from later invocations.
         _pipeCts = new CancellationTokenSource();
         _ = Task.Run(() => PipeServerLoopAsync(_pipeCts.Token));
+        StartupTiming.Mark("pipe-started");
 
         // Handle the path we ourselves were started with.
         if (e.Args.Length > 0)

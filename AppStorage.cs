@@ -115,7 +115,9 @@ public enum TerminalKind
 
 /// <summary>
 /// Owns all app data under %APPDATA%\FileTabs: bookmarks and session.
-/// JSON is kept human-readable (no escaping of CJK characters).
+/// User-edited files are pretty-printed with CJK left unescaped; the two
+/// machine files (session.json, history.json) are compact because they are
+/// rewritten on navigation and never read by hand.
 /// Writes are atomic: save to a temp file, flush to disk, then rename over
 /// the target so a crash cannot leave a half-written JSON behind.
 /// Failures are logged to app.log instead of interrupting the caller.
@@ -135,6 +137,15 @@ public static class AppStorage
         WriteIndented = true,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         // WindowLeft/Top use NaN as the "no saved placement yet" sentinel.
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+    };
+
+    // Same shape as JsonOptions without indentation, for files that are
+    // written whole on every navigation.
+    private static readonly JsonSerializerOptions CompactJsonOptions = new()
+    {
+        WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
     };
 
@@ -177,7 +188,7 @@ public static class AppStorage
         if (!File.Exists(file)) return null;
         try
         {
-            return JsonSerializer.Deserialize<SessionData>(File.ReadAllText(file), JsonOptions);
+            return JsonSerializer.Deserialize<SessionData>(File.ReadAllText(file), CompactJsonOptions);
         }
         catch (JsonException)
         {
@@ -192,7 +203,7 @@ public static class AppStorage
         try
         {
             WriteFileLocked(Path.Combine(DataDirectory, "session.json"),
-                JsonSerializer.Serialize(session, JsonOptions));
+                JsonSerializer.Serialize(session, CompactJsonOptions));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -210,7 +221,7 @@ public static class AppStorage
     {
         try
         {
-            var json = JsonSerializer.Serialize(session, JsonOptions);
+            var json = JsonSerializer.Serialize(session, CompactJsonOptions);
             GetWriteQueue("session.json").Post(json);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -291,7 +302,7 @@ public static class AppStorage
         if (!File.Exists(file)) return new List<RecentLocation>();
         try
         {
-            return JsonSerializer.Deserialize<List<RecentLocation>>(File.ReadAllText(file), JsonOptions)
+            return JsonSerializer.Deserialize<List<RecentLocation>>(File.ReadAllText(file), CompactJsonOptions)
                    ?? new List<RecentLocation>();
         }
         catch (JsonException)
@@ -307,7 +318,7 @@ public static class AppStorage
         try
         {
             WriteFileLocked(Path.Combine(DataDirectory, "history.json"),
-                JsonSerializer.Serialize(recentLocations, JsonOptions));
+                JsonSerializer.Serialize(recentLocations, CompactJsonOptions));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -319,7 +330,7 @@ public static class AppStorage
     {
         try
         {
-            var json = JsonSerializer.Serialize(recentLocations, JsonOptions);
+            var json = JsonSerializer.Serialize(recentLocations, CompactJsonOptions);
             GetWriteQueue("history.json").Post(json);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -513,7 +524,34 @@ public static class AppStorage
         try
         {
             Directory.CreateDirectory(DataDirectory);
-            File.AppendAllText(Path.Combine(DataDirectory, "app.log"),
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        var logPath = Path.Combine(DataDirectory, "app.log");
+        // app.log is append-only and only written on failures; cap it so a
+        // long-lived install cannot grow it without bound. One previous file
+        // is enough to keep the context around a recent failure. Rotation is
+        // best-effort: if it fails (another process holds the file), still
+        // append below instead of dropping the line.
+        try
+        {
+            var info = new FileInfo(logPath);
+            if (info.Exists && info.Length >= AppLogMaxBytes)
+            {
+                File.Move(logPath, logPath + ".1", overwrite: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Keep logging into the current file; retry next time.
+        }
+
+        try
+        {
+            File.AppendAllText(logPath,
                 $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} {message}{Environment.NewLine}",
                 JsonFileEncoding);
         }
@@ -522,4 +560,6 @@ public static class AppStorage
             // Losing a log line must not crash the app.
         }
     }
+
+    private const long AppLogMaxBytes = 1024 * 1024;
 }
