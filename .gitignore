@@ -6,6 +6,7 @@ node_modules/
 *.tmp
 [Oo]bj/
 *.log
+TestResults/
 tools/
 installer/
 buildtmp/
