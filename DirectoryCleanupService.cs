@@ -139,13 +139,9 @@ public static class DirectoryCleanupService
                 totalSize += size;
 
                 var modified = SafeLastWriteTime(file);
-                if (modified != DateTime.MinValue && modified < cutoff)
-                {
-                    staleFileCount++;
-                    staleTotalSize += size;
-                }
 
-                // 隐藏项和联接不进入“可删除”列表，但已经计入统计。
+                // 隐藏项和联接不可选，也不会出现在超期/大文件列表里，
+                // 所以不计入可清理的超期数量和大小，避免“统计 4 个、列表只有 3 个”。
                 if (isReparsePoint || (isHidden && !options.IncludeHidden)) continue;
 
                 var entry = new CleanupEntry(
@@ -154,10 +150,14 @@ public static class DirectoryCleanupService
                     size,
                     modified);
 
-                if (modified != DateTime.MinValue && modified < cutoff &&
-                    staleFiles.Count < staleLimit)
+                if (modified != DateTime.MinValue && modified < cutoff)
                 {
-                    staleFiles.Add(entry);
+                    staleFileCount++;
+                    staleTotalSize += size;
+                    if (staleFiles.Count < staleLimit)
+                    {
+                        staleFiles.Add(entry);
+                    }
                 }
 
                 largestFiles.Add(entry);

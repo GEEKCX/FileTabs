@@ -103,6 +103,25 @@ public sealed class DirectoryCleanupServiceTests : IDisposable
     }
 
     [Fact]
+    public void HiddenStaleFilesAreExcludedFromStaleStatsByDefault()
+    {
+        File.SetLastWriteTime(_hiddenFile, new DateTime(2020, 1, 1));
+
+        var result = DirectoryCleanupService.Scan(_root, Options());
+
+        // 隐藏文件不可选，不应让“超期文件”数量大于列表里的可删除项。
+        Assert.Equal(1, result.StaleFileCount);
+        Assert.Equal(10, result.StaleTotalSize); // old.txt only
+        Assert.DoesNotContain(result.StaleFiles,
+            entry => Path.GetFileName(entry.Path) == "secret.txt");
+
+        var withHidden = DirectoryCleanupService.Scan(_root, Options(includeHidden: true));
+        Assert.Equal(2, withHidden.StaleFileCount);
+        Assert.Contains(withHidden.StaleFiles,
+            entry => Path.GetFileName(entry.Path) == "secret.txt");
+    }
+
+    [Fact]
     public void NonRecursiveScanStopsAtTopLevel()
     {
         var result = DirectoryCleanupService.Scan(_root, Options(recursive: false));
