@@ -251,6 +251,23 @@
                 </Border>
 
                 <Border Style="{StaticResource SettingsSection}">
+                    <StackPanel>
+                        <TextBlock Text="数据与恢复" Style="{StaticResource SettingsSectionTitle}"/>
+                        <TextBlock x:Name="DataDirectoryText"
+                                   Style="{StaticResource SettingsHint}"
+                                   Margin="0,8,0,0"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                            <Button Content="打开数据目录" Height="30" Padding="12,0"
+                                    Click="OpenDataDirectory_Click"/>
+                            <Button Content="恢复最近备份" Height="30" Padding="12,0"
+                                    Margin="8,0,0,0" Click="RestoreBackup_Click"/>
+                        </StackPanel>
+                        <TextBlock Text="恢复会用每个文件的上一版（.bak）覆盖当前内容，完成后 FileTabs 会自动重启。"
+                                   Style="{StaticResource SettingsHint}"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Style="{StaticResource SettingsSection}">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.IO;
 using System.IO.Pipes;
@@ -7,6 +8,7 @@ using System.Windows;
 using System.Windows.Threading;
 // WinForms (UseWindowsForms) and WPF both define Application; WPF wins here.
 using Application = System.Windows.Application;
+using MessageBox = System.Windows.MessageBox;
 
 namespace FileTabs;
 
@@ -26,6 +28,7 @@ public partial class App : Application
     private EventWaitHandle? _restoreSignal;
     private CancellationTokenSource? _pipeCts;
     private DropPointManager? _dropPoints;
+    private bool _handlingUiException;
 
     /// <summary>
     /// Shared manager for the drag-and-drop staging pad. Settings dialog uses
@@ -175,19 +178,33 @@ public partial class App : Application
         // Crash-report triage for a tool used as a primary file manager.
         DispatcherUnhandledException += (_, args) =>
         {
-            AppStorage.Log("Unhandled UI exception: " + args.Exception);
-            args.Handled = false;
+            // A second exception raised while the recovery dialog is open must
+            // not start a nested dialog chain. Stop the process instead.
+            if (_handlingUiException)
+            {
+                AppStorage.LogCrash(
+                    "Second UI exception while recovering from a crash", args.Exception);
+                args.Handled = true;
+                Shutdown();
+                return;
+            }
+            _handlingUiException = true;
+            // The recovery handler owns the shutdown decision now; letting the
+            // default handler terminate first would skip the dialog.
+            args.Handled = true;
+            HandleUiException(args.Exception);
         };
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
-            if (args.ExceptionObject is Exception ex)
-            {
-                AppStorage.Log("Unhandled exception: " + ex);
-            }
+            var exception = args.ExceptionObject as Exception;
+            AppStorage.Log("Unhandled exception: " + (exception ?? args.ExceptionObject));
+            AppStorage.LogCrash(
+                $"Unhandled non-UI exception (terminating={args.IsTerminating})", exception);
         };
         TaskScheduler.UnobservedTaskException += (_, args) =>
         {
             AppStorage.Log("Unobserved task exception: " + args.Exception);
+            AppStorage.LogCrash("Unobserved task exception", args.Exception);
             args.SetObserved();
         };
 
@@ -212,6 +229,110 @@ public partial class App : Application
     {
         if (!StartupRegistration.IsLegacyCommand()) return;
         StartupRegistration.Enable();
+    }
+
+    /// <summary>
+    /// One unhandled UI exception is enough: save what we can, give the user a
+    /// recovery choice, then always shut down. Resuming normal work after the
+    /// dialog would leave the process in an unknown state.
+    /// </summary>
+    private void HandleUiException(Exception exception)
+    {
+        try
+        {
+            AppStorage.Log("Unhandled UI exception: " + exception);
+            AppStorage.LogCrash("Unhandled UI exception", exception);
+
+            if (MainWindow is MainWindow main)
+            {
+                main.FlushSessionForCrash();
+            }
+
+            var action = CrashRecoveryAction.Exit;
+            try
+            {
+                var dialog = new CrashRecoveryWindow(exception);
+                if (MainWindow is MainWindow { IsVisible: true } owner)
+                {
+                    dialog.Owner = owner;
+                }
+                dialog.ShowDialog();
+                action = dialog.Action;
+            }
+            catch (Exception dialogException)
+            {
+                // If even the dialog cannot be created, still offer the one
+                // decision that matters instead of disappearing silently.
+                AppStorage.LogCrash("Failed to show crash recovery dialog", dialogException);
+                var result = MessageBox.Show(
+                    "FileTabs 遇到未处理的错误。是否重启并恢复上次会话？",
+                    "FileTabs", MessageBoxButton.YesNo, MessageBoxImage.Error);
+                if (result == MessageBoxResult.Yes)
+                {
+                    action = CrashRecoveryAction.Restart;
+                }
+            }
+
+            if (action == CrashRecoveryAction.Restart)
+            {
+                RestartApplication();
+            }
+        }
+        catch (Exception recoveryException)
+        {
+            // The crash path itself must never throw another exception.
+            AppStorage.LogCrash("Crash recovery handler failed", recoveryException);
+        }
+        finally
+        {
+            Shutdown();
+        }
+    }
+
+    public void RestartForDataRestore()
+    {
+        if (MainWindow is MainWindow main)
+        {
+            main.PrepareForDataRestore();
+        }
+        RestartApplication();
+        Shutdown();
+    }
+
+    private void RestartApplication()
+    {
+        try
+        {
+            // Release first: otherwise the new process sees a live instance,
+            // forwards its activation to this one, and exits immediately.
+            ReleaseSingleInstanceMutex();
+            var executable = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executable))
+            {
+                AppStorage.LogCrash("Cannot restart FileTabs: process path is unavailable.");
+                return;
+            }
+            Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            // Restart is best-effort; the user still has the data directory.
+            AppStorage.LogCrash("Failed to restart FileTabs", ex);
+        }
+    }
+
+    private void ReleaseSingleInstanceMutex()
+    {
+        if (!_ownsSingleInstanceMutex) return;
+        try
+        {
+            _singleInstanceMutex?.ReleaseMutex();
+        }
+        catch (ApplicationException)
+        {
+            // The mutex was already released or abandoned.
+        }
+        _ownsSingleInstanceMutex = false;
     }
 
     protected override void OnExit(ExitEventArgs e)

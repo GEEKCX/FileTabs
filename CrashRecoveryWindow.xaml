@@ -1,0 +1,44 @@
+<Window x:Class="FileTabs.CrashRecoveryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="FileTabs 遇到问题"
+        Width="500"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
+        ShowInTaskbar="True"
+        Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+        Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+        FontFamily="{x:Static SystemFonts.MessageFontFamily}"
+        FontSize="{x:Static SystemFonts.MessageFontSize}">
+    <Grid Margin="20">
+        <StackPanel>
+            <TextBlock Text="FileTabs 遇到未处理的错误"
+                       FontSize="18" FontWeight="SemiBold"/>
+            <TextBlock Text="当前标签页已尽量保存。重启后会自动恢复上次会话；你也可以先打开数据目录查看日志或备份。"
+                       TextWrapping="Wrap" Margin="0,10,0,0"/>
+            <Border Background="{DynamicResource FileTabs.SettingsCardBrush}"
+                    BorderBrush="{DynamicResource FileTabs.SettingsCardBorderBrush}"
+                    BorderThickness="1" CornerRadius="6"
+                    Padding="10" Margin="0,14,0,0">
+                <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
+                    <TextBlock x:Name="ErrorText"
+                               TextWrapping="Wrap"
+                               FontFamily="Consolas" FontSize="12"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                </ScrollViewer>
+            </Border>
+            <TextBlock Text="完整堆栈已写入 crash.log。"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       FontSize="12" Margin="0,8,0,0"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+                <Button Content="打开数据目录" Height="32" Padding="12,0"
+                        Click="OpenDataDirectory_Click"/>
+                <Button Content="退出" Width="76" Height="32" Margin="8,0,0,0"
+                        IsCancel="True" Click="Exit_Click"/>
+                <Button Content="重启并恢复" Width="100" Height="32" Margin="8,0,0,0"
+                        IsDefault="True" Click="Restart_Click"/>
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Text.Encodings.Web;
 using System.Text;
@@ -136,7 +137,9 @@ public enum TerminalKind
 /// machine files (session.json, history.json) are compact because they are
 /// rewritten on navigation and never read by hand.
 /// Writes are atomic: save to a temp file, flush to disk, then rename over
-/// the target so a crash cannot leave a half-written JSON behind.
+/// the target so a crash cannot leave a half-written JSON behind. Every
+/// replacement also keeps the previous version as &lt;file&gt;.bak, and loading
+/// falls back to that copy if the primary is missing or corrupt.
 /// Failures are logged to app.log instead of interrupting the caller.
 /// </summary>
 public static class AppStorage
@@ -172,18 +175,9 @@ public static class AppStorage
     public static List<Bookmark> LoadBookmarks()
     {
         var file = Path.Combine(DataDirectory, "bookmarks.json");
-        if (!File.Exists(file)) return new List<Bookmark>();
-        try
-        {
-            return JsonSerializer.Deserialize<List<Bookmark>>(File.ReadAllText(file), JsonOptions)
-                   ?? new List<Bookmark>();
-        }
-        catch (JsonException)
-        {
-            ArchiveCorruptFile(file);
-            Log("bookmarks.json is corrupt; ignored.");
-            return new List<Bookmark>();
-        }
+        return TryLoadJsonWithBackup<List<Bookmark>>(file, JsonOptions, out var bookmarks)
+            ? bookmarks ?? new List<Bookmark>()
+            : new List<Bookmark>();
     }
 
     public static void SaveBookmarks(IEnumerable<Bookmark> bookmarks)
@@ -202,17 +196,9 @@ public static class AppStorage
     public static SessionData? LoadSession()
     {
         var file = Path.Combine(DataDirectory, "session.json");
-        if (!File.Exists(file)) return null;
-        try
-        {
-            return JsonSerializer.Deserialize<SessionData>(File.ReadAllText(file), CompactJsonOptions);
-        }
-        catch (JsonException)
-        {
-            ArchiveCorruptFile(file);
-            Log("session.json is corrupt; ignored.");
-            return null;
-        }
+        return TryLoadJsonWithBackup<SessionData>(file, CompactJsonOptions, out var session)
+            ? session
+            : null;
     }
 
     public static void SaveSession(SessionData session)
@@ -250,18 +236,9 @@ public static class AppStorage
     public static List<Workspace> LoadWorkspaces()
     {
         var file = Path.Combine(DataDirectory, "workspaces.json");
-        if (!File.Exists(file)) return new List<Workspace>();
-        try
-        {
-            return JsonSerializer.Deserialize<List<Workspace>>(File.ReadAllText(file), JsonOptions)
-                   ?? new List<Workspace>();
-        }
-        catch (JsonException)
-        {
-            ArchiveCorruptFile(file);
-            Log("workspaces.json is corrupt; ignored.");
-            return new List<Workspace>();
-        }
+        return TryLoadJsonWithBackup<List<Workspace>>(file, JsonOptions, out var workspaces)
+            ? workspaces ?? new List<Workspace>()
+            : new List<Workspace>();
     }
 
     public static void SaveWorkspaces(IEnumerable<Workspace> workspaces)
@@ -282,20 +259,10 @@ public static class AppStorage
 
     public static List<FolderTemplate> LoadFolderTemplates()
     {
-        var file = FolderTemplatePath;
-        if (!File.Exists(file)) return new List<FolderTemplate>();
-        try
-        {
-            return JsonSerializer.Deserialize<List<FolderTemplate>>(
-                       File.ReadAllText(file), JsonOptions)
-                   ?? new List<FolderTemplate>();
-        }
-        catch (JsonException)
-        {
-            ArchiveCorruptFile(file);
-            Log("folder-templates.json is corrupt; ignored.");
-            return new List<FolderTemplate>();
-        }
+        return TryLoadJsonWithBackup<List<FolderTemplate>>(
+                FolderTemplatePath, JsonOptions, out var templates)
+            ? templates ?? new List<FolderTemplate>()
+            : new List<FolderTemplate>();
     }
 
     public static bool SaveFolderTemplates(IEnumerable<FolderTemplate> templates)
@@ -318,18 +285,10 @@ public static class AppStorage
 
     public static RenameHistory? LoadRenameHistory()
     {
-        var file = RenameHistoryPath;
-        if (!File.Exists(file)) return null;
-        try
-        {
-            return JsonSerializer.Deserialize<RenameHistory>(File.ReadAllText(file), JsonOptions);
-        }
-        catch (JsonException)
-        {
-            ArchiveCorruptFile(file);
-            Log("rename-history.json is corrupt; ignored.");
-            return null;
-        }
+        return TryLoadJsonWithBackup<RenameHistory>(
+                RenameHistoryPath, JsonOptions, out var history)
+            ? history
+            : null;
     }
 
     public static bool SaveRenameHistory(RenameHistory history)
@@ -351,7 +310,12 @@ public static class AppStorage
     {
         try
         {
-            if (File.Exists(RenameHistoryPath)) File.Delete(RenameHistoryPath);
+            // The .bak must go too: otherwise the next load would restore the
+            // history the user just cleared.
+            foreach (var path in new[] { RenameHistoryPath, BackupPath(RenameHistoryPath) })
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -362,18 +326,9 @@ public static class AppStorage
     public static List<RecentLocation> LoadRecentLocations()
     {
         var file = Path.Combine(DataDirectory, "history.json");
-        if (!File.Exists(file)) return new List<RecentLocation>();
-        try
-        {
-            return JsonSerializer.Deserialize<List<RecentLocation>>(File.ReadAllText(file), CompactJsonOptions)
-                   ?? new List<RecentLocation>();
-        }
-        catch (JsonException)
-        {
-            ArchiveCorruptFile(file);
-            Log("history.json is corrupt; ignored.");
-            return new List<RecentLocation>();
-        }
+        return TryLoadJsonWithBackup<List<RecentLocation>>(file, CompactJsonOptions, out var locations)
+            ? locations ?? new List<RecentLocation>()
+            : new List<RecentLocation>();
     }
 
     public static void SaveRecentLocations(IEnumerable<RecentLocation> recentLocations)
@@ -408,6 +363,84 @@ public static class AppStorage
         foreach (var queue in WriteQueues.Values)
         {
             queue.WaitForIdle(timeout);
+        }
+    }
+
+    private static readonly string[] RestorableFileNames =
+    {
+        "session.json",
+        "bookmarks.json",
+        "workspaces.json",
+        "folder-templates.json",
+        "rename-history.json",
+        "settings.json",
+        "history.json",
+    };
+
+    /// <summary>True when at least one of the data files has a .bak to restore.</summary>
+    public static bool HasLatestBackups()
+    {
+        foreach (var fileName in RestorableFileNames)
+        {
+            if (File.Exists(BackupPath(Path.Combine(DataDirectory, fileName))))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Overwrite every primary JSON with its .bak after validating the backup.
+    /// Used by the settings-page recovery entry. Returns the number of files
+    /// restored; the backup itself is left in place so the operation can be
+    /// inspected afterwards.
+    /// </summary>
+    public static int RestoreLatestBackups()
+    {
+        var restored = 0;
+        foreach (var fileName in RestorableFileNames)
+        {
+            var file = Path.Combine(DataDirectory, fileName);
+            var backup = BackupPath(file);
+            if (!File.Exists(backup)) continue;
+            try
+            {
+                var content = File.ReadAllText(backup);
+                // A corrupt backup must never replace a readable primary.
+                using var _ = JsonDocument.Parse(content);
+                lock (WriteLock)
+                {
+                    WriteFileAtomically(file, content, keepPreviousVersion: false);
+                }
+                restored++;
+                Log($"{fileName} restored from backup by user request.");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                Log($"Failed to restore {fileName} from backup: {ex.Message}");
+            }
+        }
+        return restored;
+    }
+
+    public static bool TryOpenDataDirectory()
+    {
+        try
+        {
+            Directory.CreateDirectory(DataDirectory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = DataDirectory,
+                UseShellExecute = true,
+            });
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Log($"Failed to open data directory: {ex.Message}");
+            return false;
         }
     }
 
@@ -504,18 +537,9 @@ public static class AppStorage
     public static AppSettings? LoadSettings()
     {
         var file = Path.Combine(DataDirectory, "settings.json");
-        if (!File.Exists(file)) return new AppSettings();
-        try
-        {
-            return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(file), JsonOptions)
-                   ?? new AppSettings();
-        }
-        catch (JsonException)
-        {
-            ArchiveCorruptFile(file);
-            Log("settings.json is corrupt; ignored.");
-            return new AppSettings();
-        }
+        return TryLoadJsonWithBackup<AppSettings>(file, JsonOptions, out var settings)
+            ? settings ?? new AppSettings()
+            : new AppSettings();
     }
 
     public static void SaveSettings(AppSettings settings)
@@ -544,10 +568,107 @@ public static class AppStorage
     }
 
     /// <summary>
+    /// Load a data file, falling back to the copy saved before the previous
+    /// successful write. A primary file that fails to parse is archived as
+    /// .bad first, then the .bak is promoted back to the primary path so the
+    /// next save rotates from a known-good file instead of a corrupt one.
+    /// </summary>
+    private static bool TryLoadJsonWithBackup<T>(
+        string file, JsonSerializerOptions options, out T? value)
+    {
+        var backup = BackupPath(file);
+        var primaryExists = File.Exists(file);
+
+        if (TryReadJson(file, options, out value, out var primaryError))
+        {
+            return true;
+        }
+
+        if (primaryExists && primaryError is JsonException)
+        {
+            ArchiveCorruptFile(file);
+        }
+
+        if (TryReadJson(backup, options, out value, out var backupError))
+        {
+            Log($"{Path.GetFileName(file)} was restored from {Path.GetFileName(backup)}.");
+            TryRestorePrimary(file, backup);
+            return true;
+        }
+
+        if (primaryError is JsonException)
+        {
+            Log($"{Path.GetFileName(file)} is corrupt; ignored.");
+        }
+        else if (primaryError is not null)
+        {
+            Log($"{Path.GetFileName(file)} could not be read: {primaryError.Message}");
+        }
+        if (backupError is JsonException)
+        {
+            Log($"{Path.GetFileName(backup)} is corrupt; ignored.");
+        }
+
+        return false;
+    }
+
+    private static bool TryReadJson<T>(
+        string file, JsonSerializerOptions options, out T? value, out Exception? error)
+    {
+        value = default;
+        error = null;
+        if (!File.Exists(file)) return false;
+        try
+        {
+            value = JsonSerializer.Deserialize<T>(File.ReadAllText(file), options);
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            error = ex;
+            return false;
+        }
+    }
+
+    private static void TryRestorePrimary(string file, string backup)
+    {
+        try
+        {
+            // No backup rotation here: the valid backup must survive even if
+            // this restore fails.
+            WriteFileAtomically(file, File.ReadAllText(backup), keepPreviousVersion: false);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"Failed to restore {Path.GetFileName(file)}: {ex.Message}");
+        }
+    }
+
+    private static string BackupPath(string path) => path + ".bak";
+
+    private static bool TryCreateBackup(string path, string backup)
+    {
+        try
+        {
+            File.Copy(path, backup, overwrite: true);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log($"Failed to back up {Path.GetFileName(path)}: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Write to a unique temp file so concurrent saves never see a partial
     /// payload, then swap it over the target. The rename is atomic on NTFS.
+    /// The previous version is kept as &lt;file&gt;.bak: File.Replace does the
+    /// swap and backup in one step; the copy+move fallback still refuses to
+    /// overwrite the primary when the backup cannot be created.
     /// </summary>
-    private static void WriteFileAtomically(string path, string content)
+    private static void WriteFileAtomically(
+        string path, string content, bool keepPreviousVersion = true)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = $"{path}.{Guid.NewGuid():N}.tmp";
@@ -560,7 +681,31 @@ public static class AppStorage
                 writer.Flush();
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(temp, path, overwrite: true);
+
+            if (!keepPreviousVersion || !File.Exists(path))
+            {
+                File.Move(temp, path, overwrite: true);
+                return;
+            }
+
+            var backup = BackupPath(path);
+            try
+            {
+                File.Replace(temp, path, backup, ignoreMetadataErrors: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                or PlatformNotSupportedException)
+            {
+                // File.Replace is unavailable on some file systems. Copy the
+                // old file first; if even that fails, keep the primary intact
+                // rather than writing without a recoverable previous version.
+                if (!TryCreateBackup(path, backup))
+                {
+                    throw new IOException(
+                        $"Could not back up {Path.GetFileName(path)}; previous file kept.", ex);
+                }
+                File.Move(temp, path, overwrite: true);
+            }
         }
         finally
         {
@@ -582,7 +727,33 @@ public static class AppStorage
     }
 
     /// <summary>Best-effort append-only log for data failures we deliberately swallow.</summary>
-    public static void Log(string message)
+    public static void Log(string message) => AppendLogLine("app.log", message);
+
+    /// <summary>
+    /// Separate, longer-lived record for unhandled exceptions so a crash can
+    /// be diagnosed even after app.log has rotated.
+    /// </summary>
+    public static void LogCrash(string message, Exception? exception = null)
+    {
+        var details = exception is null
+            ? message
+            : $"{message}{Environment.NewLine}{exception}";
+        AppendLogLine("crash.log", details);
+    }
+
+    private static void AppendLogLine(string fileName, string message)
+    {
+        // Crash handlers run on different threads; serialize appends so two
+        // concurrent File.AppendAllText calls cannot fail each other.
+        lock (LogLock)
+        {
+            AppendLogLineCore(fileName, message);
+        }
+    }
+
+    private static readonly object LogLock = new();
+
+    private static void AppendLogLineCore(string fileName, string message)
     {
         try
         {
@@ -593,16 +764,16 @@ public static class AppStorage
             return;
         }
 
-        var logPath = Path.Combine(DataDirectory, "app.log");
-        // app.log is append-only and only written on failures; cap it so a
-        // long-lived install cannot grow it without bound. One previous file
+        var logPath = Path.Combine(DataDirectory, fileName);
+        // Logs are append-only and only written on failures; cap each so a
+        // long-lived install cannot grow one without bound. One previous file
         // is enough to keep the context around a recent failure. Rotation is
         // best-effort: if it fails (another process holds the file), still
         // append below instead of dropping the line.
         try
         {
             var info = new FileInfo(logPath);
-            if (info.Exists && info.Length >= AppLogMaxBytes)
+            if (info.Exists && info.Length >= MaxLogBytes)
             {
                 File.Move(logPath, logPath + ".1", overwrite: true);
             }
@@ -624,5 +795,5 @@ public static class AppStorage
         }
     }
 
-    private const long AppLogMaxBytes = 1024 * 1024;
+    private const long MaxLogBytes = 1024 * 1024;
 }

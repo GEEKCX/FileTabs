@@ -3,8 +3,9 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Interop;
 using Microsoft.WindowsAPICodePack.Shell;
-// WinForms (UseWindowsForms) and WPF both define MessageBox; WPF wins here.
+// WinForms (UseWindowsForms) and WPF both define MessageBox/Application; WPF wins here.
 using MessageBox = System.Windows.MessageBox;
+using Application = System.Windows.Application;
 using Screen = System.Windows.Forms.Screen;
 
 namespace FileTabs;
@@ -56,6 +57,7 @@ public partial class SettingsWindow : Window
             .GetName().Version is { } version
             ? version.ToString(3)
             : "?");
+        DataDirectoryText.Text = AppStorage.DataDirectory;
     }
 
     private void FitToWorkArea()
@@ -108,6 +110,66 @@ public partial class SettingsWindow : Window
         if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
         {
             NewTabPathBox.Text = dialog.SelectedPath;
+        }
+    }
+
+    private void OpenDataDirectory_Click(object sender, RoutedEventArgs e)
+    {
+        if (AppStorage.TryOpenDataDirectory()) return;
+        MessageBox.Show(this,
+            $"无法打开数据目录：{Environment.NewLine}{AppStorage.DataDirectory}",
+            "FileTabs 设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private void RestoreBackup_Click(object sender, RoutedEventArgs e)
+    {
+        if (!AppStorage.HasLatestBackups())
+        {
+            MessageBox.Show(this, "没有找到可用的备份。", "恢复最近备份",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        // Stop the background session/history timers before the confirmation
+        // message box: its nested message loop could otherwise save the
+        // current session and rotate the .bak we are about to restore.
+        var main = Owner as MainWindow;
+        main?.PrepareForDataRestore();
+
+        var confirm = MessageBox.Show(this,
+            "将用每个数据文件的上一版（.bak）覆盖当前内容。\n" +
+            "包括会话、书签、工作区、目录模板、重命名历史、设置和最近位置。\n\n" +
+            "当前内容会被替换，恢复后 FileTabs 会自动重启。继续吗？",
+            "恢复最近备份", MessageBoxButton.YesNo,
+            MessageBoxImage.Warning, MessageBoxResult.No);
+        if (confirm != MessageBoxResult.Yes)
+        {
+            main?.ResumeDataSavingAfterRestoreCancel();
+            return;
+        }
+
+        var restored = AppStorage.RestoreLatestBackups();
+        if (restored == 0)
+        {
+            main?.ResumeDataSavingAfterRestoreCancel();
+            MessageBox.Show(this, "恢复失败，详情见数据目录中的 app.log。", "恢复最近备份",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        MessageBox.Show(this,
+            $"已恢复 {restored} 个数据文件。FileTabs 将重启以加载恢复的数据。",
+            "恢复最近备份", MessageBoxButton.OK, MessageBoxImage.Information);
+
+        if (Application.Current is App app)
+        {
+            // PrepareForDataRestore already suppressed the normal close-time
+            // save; this restarts so the restored files are actually loaded.
+            app.RestartForDataRestore();
+        }
+        else
+        {
+            Application.Current?.Shutdown();
         }
     }
 

@@ -46,6 +46,10 @@ public partial class MainWindow : FluentWindow
     private Bookmark? _dragBookmark;
     private bool _isDraggingBookmark;
     private bool _isClosing;
+    // The crash handler and the "restore latest backup" action must not let
+    // the normal close path write in-memory data over the files just saved or
+    // restored. Set before the one allowed save/shutdown.
+    private bool _skipDataSaveOnExit;
     // Keeps session.json small; only the most recent entries are reopenable.
     private const int RecentlyClosedLimit = 50;
     private List<string> _recentlyClosed = new();
@@ -510,6 +514,7 @@ public partial class MainWindow : FluentWindow
 
     private void SaveWindowPlacement()
     {
+        if (_skipDataSaveOnExit) return;
         var bounds = WindowState == WindowState.Normal
             ? new Rect(Left, Top, ActualWidth, Height)
             : _normalWindowBounds;
@@ -1336,6 +1341,12 @@ public partial class MainWindow : FluentWindow
 
     private void FlushSessionBeforeClose()
     {
+        if (_skipDataSaveOnExit) return;
+        SaveSessionBeforeExit();
+    }
+
+    private void SaveSessionBeforeExit()
+    {
         StopSessionSaveTimer();
         if (_historySaveTimer.IsEnabled)
         {
@@ -1344,6 +1355,45 @@ public partial class MainWindow : FluentWindow
             FlushRecentLocations();
         }
         SaveCurrentSession(synchronous: true);
+    }
+
+    /// <summary>
+    /// Called from the global UI-exception handler before the recovery dialog.
+    /// A crash may leave the tab collection half-updated, so failures here are
+    /// logged and never allowed to replace the original exception.
+    /// </summary>
+    public void FlushSessionForCrash()
+    {
+        if (_skipDataSaveOnExit) return;
+        _skipDataSaveOnExit = true;
+        try
+        {
+            SaveSessionBeforeExit();
+        }
+        catch (Exception ex)
+        {
+            AppStorage.LogCrash("Failed to flush session before crash", ex);
+        }
+    }
+
+    /// <summary>
+    /// Called after restored data has been written and before the app restarts.
+    /// The normal close path would otherwise overwrite session.json and
+    /// settings.json with the pre-restore in-memory state.
+    /// </summary>
+    public void PrepareForDataRestore()
+    {
+        _skipDataSaveOnExit = true;
+        StopSessionSaveTimer();
+        _historySaveTimer.Stop();
+        AppStorage.WaitForPendingWrites(TimeSpan.FromSeconds(2));
+    }
+
+    /// <summary>The user cancelled or the restore failed; resume normal saves.</summary>
+    public void ResumeDataSavingAfterRestoreCancel()
+    {
+        _skipDataSaveOnExit = false;
+        MarkSessionDirty();
     }
 
     private void ReopenClosedTab()

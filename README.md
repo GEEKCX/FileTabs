@@ -27,6 +27,17 @@ Windows 多标签文件管理器——直接承载 **Windows 原生 Explorer 视
 - **主题**：浅色 / 深色 / 跟随系统，窗口使用 Mica 背景。
 - **单实例**：重复启动自动聚焦已开窗口；常驻托盘便于找回主窗口与退出。
 
+## 数据与恢复
+
+数据默认保存在 `%APPDATA%\FileTabs`，可以在 **设置 → 数据与恢复 → 打开数据目录** 直接打开。主要文件包括 `session.json`（标签会话）、`bookmarks.json`、`workspaces.json`、`folder-templates.json`、`rename-history.json`、`settings.json` 和 `history.json`。
+
+每次保存会把上一版保留为同名 `.bak`（例如 `session.json.bak`）。每个文件只保留一版；下一次保存会覆盖旧的 `.bak`。
+
+- **自动恢复**：启动或读取时如果主文件缺失、损坏，会自动读取 `.bak`，把损坏的主文件另存为 `.bad`，再用备份恢复主文件。使用备份会记录到 `app.log`。
+- **手动恢复**：打开 **设置 → 数据与恢复 → 恢复最近备份**，确认后 FileTabs 会自动重启并加载恢复的数据。也可以关掉 FileTabs 后，在数据目录里把 `<文件名>.bak` 复制成 `<文件名>`（例如把 `bookmarks.json.bak` 复制为 `bookmarks.json`）。
+- **注意**：“恢复最近备份”会用 `.bak` 覆盖当前文件，当前内容不会另存；确认前先打开数据目录备份需要的文件。
+- **崩溃记录**：UI 线程未处理异常会先同步保存当前会话，再提示“重启并恢复 / 打开数据目录 / 退出”；非 UI 线程异常写入 `crash.log`。`app.log` 和 `crash.log` 各保留一份上一版，超过 1 MB 时轮转为 `.1`。
+
 ## 快捷键
 
 | 按键 | 功能 |
