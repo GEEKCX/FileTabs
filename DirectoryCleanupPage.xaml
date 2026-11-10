@@ -77,6 +77,7 @@
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Style="{StaticResource FileTabs.RowCheckBox}"
                                                       HorizontalAlignment="Center"
                                                       Checked="RowCheck_Changed"
                                                       Unchecked="RowCheck_Changed"/>
@@ -104,6 +105,7 @@
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Style="{StaticResource FileTabs.RowCheckBox}"
                                                       HorizontalAlignment="Center"
                                                       Checked="RowCheck_Changed"
                                                       Unchecked="RowCheck_Changed"/>
@@ -131,6 +133,7 @@
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      Style="{StaticResource FileTabs.RowCheckBox}"
                                                       HorizontalAlignment="Center"
                                                       Checked="RowCheck_Changed"
                                                       Unchecked="RowCheck_Changed"/>

@@ -217,6 +217,59 @@
              here. Windows shell controls (the ExplorerBrowser content itself)
              keep following the system theme, so only the WPF chrome around it
              is themed. -->
+        <!-- 列表行里的复选框。WPF UI 自带的勾选动画依赖 Tag 驱动裁剪，
+             ListView 回收行容器时动画会停在半路，勾号只画出一部分
+             （扩展中心 → 目录清理 / 批量重命名可以看到）。这里用静态勾号，
+             不依赖动画时钟，视觉与默认样式保持一致。 -->
+        <Style x:Key="FileTabs.RowCheckBox" TargetType="CheckBox">
+            <Setter Property="Width" Value="20"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="box" Width="20" Height="20" CornerRadius="4"
+                                Background="{DynamicResource ControlFillColorDefaultBrush}"
+                                BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                BorderThickness="1">
+                            <Path x:Name="check" Width="11" Height="8"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  Data="M 0,4 L 3.5,7.5 L 11,0"
+                                  Stretch="Fill"
+                                  Stroke="{DynamicResource TextOnAccentFillColorPrimaryBrush}"
+                                  StrokeThickness="1.8"
+                                  StrokeStartLineCap="Round"
+                                  StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round"
+                                  Visibility="Collapsed"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="box" Property="Background"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <Setter TargetName="box" Property="BorderBrush"
+                                        Value="{DynamicResource AccentFillColorDefaultBrush}"/>
+                                <Setter TargetName="check" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <MultiTrigger>
+                                <MultiTrigger.Conditions>
+                                    <Condition Property="IsMouseOver" Value="True"/>
+                                    <Condition Property="IsChecked" Value="False"/>
+                                </MultiTrigger.Conditions>
+                                <Setter TargetName="box" Property="Background"
+                                        Value="{DynamicResource ControlFillColorSecondaryBrush}"/>
+                            </MultiTrigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style TargetType="Button">
             <Setter Property="Foreground" Value="{DynamicResource TextFillColorPrimaryBrush}"/>
             <Setter Property="Cursor" Value="Hand"/>
