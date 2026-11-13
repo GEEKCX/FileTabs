@@ -763,6 +763,31 @@ public partial class MainWindow : FluentWindow
         }
     }
 
+    /// <summary>
+    /// The folder activation actually happened inside our own Explorer view:
+    /// the registry redirect turns the shell's default action into a second
+    /// FileTabs process, which forwards the path back here. A tab per
+    /// double-click just duplicates the view the user is already in, so
+    /// navigate the active tab instead.
+    /// </summary>
+    public void NavigateActiveTabInPlace(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(() => NavigateActiveTabInPlace(path));
+            return;
+        }
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Activate();
+        if (_active is null)
+        {
+            AddTab(path);
+            return;
+        }
+        _active.NavigateTo(path);
+    }
+
     private void ActivateTab(BrowserTab tab)
     {
         CancelBreadcrumbInteraction();

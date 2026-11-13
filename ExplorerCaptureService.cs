@@ -170,6 +170,10 @@ public sealed class ExplorerCaptureService : IDisposable
     /// and read its current location. LocationURL covers filesystem folders;
     /// Document.Folder.Self.Path covers virtual folders (This PC, libraries).
     /// Retries briefly because the window may still be navigating.
+    ///
+    /// A reveal request ("在文件夹中显示") opens the containing folder and then
+    /// selects the target; that selection is the only place the intended folder
+    /// is named, so it wins over the viewed location when present.
     /// </summary>
     private static string? ResolveExplorerPath(int hwnd, int attempts = 12)
     {
@@ -180,13 +184,29 @@ public sealed class ExplorerCaptureService : IDisposable
         object shell = Activator.CreateInstance(shellType)!;
         try
         {
+            string? location = null;
+            long locationSeenAt = 0;
             for (int i = 0; i < attempts; i++)
             {
-                var path = TryResolveOnce(shell, hwnd);
-                if (!string.IsNullOrEmpty(path)) return path;
+                var (current, selectedFolder) = TryResolveOnce(shell, hwnd);
+                if (!string.IsNullOrEmpty(selectedFolder)) return selectedFolder;
+                if (!string.IsNullOrEmpty(current))
+                {
+                    if (location is null)
+                    {
+                        location = current;
+                        locationSeenAt = Environment.TickCount64;
+                    }
+                    // The selection lands just after the window is shown. Give
+                    // it this long to appear before settling for the folder.
+                    if (Environment.TickCount64 - locationSeenAt >= SelectionGraceMs)
+                    {
+                        return location;
+                    }
+                }
                 if (i + 1 < attempts) Thread.Sleep(80);
             }
-            return null;
+            return location;
         }
         finally
         {
@@ -194,7 +214,12 @@ public sealed class ExplorerCaptureService : IDisposable
         }
     }
 
-    private static string? TryResolveOnce(object shellObject, int hwnd)
+    /// <summary>How long a reveal request's selection gets to show up before
+    /// the viewed folder is used. Keeps ordinary windows from waiting long.</summary>
+    private const int SelectionGraceMs = 240;
+
+    private static (string? Location, string? SelectedFolder) TryResolveOnce(
+        object shellObject, int hwnd)
     {
         dynamic shell = shellObject;
         dynamic windows = shell.Windows();
@@ -209,14 +234,15 @@ public sealed class ExplorerCaptureService : IDisposable
             {
                 if ((int)window.HWND != hwnd) continue;
 
+                var selectedFolder = TryReadSingleSelectedFolder(window);
                 var url = (string?)window.LocationURL;
                 if (!string.IsNullOrEmpty(url))
                 {
                     if (url.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
                     {
-                        return new Uri(url).LocalPath;
+                        return (new Uri(url).LocalPath, selectedFolder);
                     }
-                    return url; // shell:: / ::{GUID} and friends.
+                    return (url, selectedFolder); // shell:: / ::{GUID} and friends.
                 }
 
                 // Virtual folders have an empty LocationURL; fall back to
@@ -226,14 +252,45 @@ public sealed class ExplorerCaptureService : IDisposable
                 string? selfPath = null;
                 try { selfPath = (string?)window.Document.Folder.Self.Path; }
                 catch (Exception) { /* navigation still in flight */ }
-                return string.IsNullOrEmpty(selfPath) ? null : selfPath;
+                return (string.IsNullOrEmpty(selfPath) ? null : selfPath, selectedFolder);
             }
             finally
             {
                 _ = Marshal.FinalReleaseComObject(window);
             }
         }
-        return null;
+        return (null, null);
+    }
+
+    /// <summary>
+    /// Read the single selected folder, if any. Files and multi-selections are
+    /// left alone: the caller then opens the viewed folder, which is what a
+    /// reveal of a file should do.
+    /// </summary>
+    private static string? TryReadSingleSelectedFolder(dynamic window)
+    {
+        try
+        {
+            dynamic selected = window.Document.SelectedItems();
+            if (selected is null || (int)selected.Count != 1) return null;
+            dynamic item = selected.Item(0);
+            if (item is null) return null;
+            try
+            {
+                if (!(bool)item.IsFolder) return null;
+                var path = (string?)item.Path;
+                return string.IsNullOrEmpty(path) ? null : path;
+            }
+            finally
+            {
+                _ = Marshal.FinalReleaseComObject(item);
+            }
+        }
+        catch (Exception)
+        {
+            // Late-bound shell access can throw anything while navigating.
+            return null;
+        }
     }
 
     [DllImport("user32.dll")]

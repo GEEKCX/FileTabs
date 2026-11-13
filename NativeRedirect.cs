@@ -9,8 +9,17 @@ namespace FileTabs;
 /// admin rights needed.
 ///
 /// Windows resolves folder opening through three classes: Directory for
-/// filesystem folders, Drive for drive roots, Folder as the base class. The
-/// stock handler is a COM object referenced by a "DelegateExecute" GUID.
+/// filesystem folders, Drive for drive roots, Folder as the base class. Only
+/// Directory and Drive are redirected. Folder is deliberately left alone:
+/// "show in folder" (SHOpenFolderAndSelectItems, used by every app's
+/// reveal-in-explorer action) resolves the containing folder through the
+/// Folder base class, and an external command only receives that folder's
+/// path — the selected item never reaches it, so the target was lost. Letting
+/// the shell keep that class restores reveal requests (and the Explorer window
+/// can still be taken over by ExplorerCaptureService, which can read the
+/// selection).
+///
+/// The stock handler is a COM object referenced by a "DelegateExecute" GUID.
 ///
 /// Where that GUID lives matters (verified on this machine): it sits in the
 /// verb's *command* subkey, not on the verb key itself —
@@ -27,12 +36,20 @@ namespace FileTabs;
 public static class NativeRedirect
 {
     /// <summary>Verb keys that receive "&lt;exe&gt; \"%1\"" (folder path argument).</summary>
-    private static readonly string[] FolderVerbs =
+    private static readonly string[] RedirectVerbs =
     {
         @"Software\Classes\Directory\shell\open",
         @"Software\Classes\Directory\shell\opennewwindow",
         @"Software\Classes\Drive\shell\open",
         @"Software\Classes\Drive\shell\opennewwindow",
+    };
+
+    /// <summary>
+    /// Patched by older installs, restored on Install. See the class comment:
+    /// hijacking the Folder base class breaks "show in folder" everywhere.
+    /// </summary>
+    private static readonly string[] RestoredBaseVerbs =
+    {
         @"Software\Classes\Folder\shell\open",
         @"Software\Classes\Folder\shell\opennewwindow",
     };
@@ -66,7 +83,15 @@ public static class NativeRedirect
             return;
         }
 
-        foreach (var verb in FolderVerbs)
+        // Older versions also patched the Folder base class. Put those keys
+        // back before installing, so an update converges without the user
+        // touching the registry.
+        foreach (var verb in RestoredBaseVerbs)
+        {
+            UnpatchVerb(verb);
+        }
+
+        foreach (var verb in RedirectVerbs)
         {
             PatchVerb(verb, $"\"{exe}\" \"%1\"");
         }
@@ -78,7 +103,11 @@ public static class NativeRedirect
 
     public static void Uninstall()
     {
-        foreach (var verb in FolderVerbs)
+        foreach (var verb in RedirectVerbs)
+        {
+            UnpatchVerb(verb);
+        }
+        foreach (var verb in RestoredBaseVerbs)
         {
             UnpatchVerb(verb);
         }
@@ -93,6 +122,24 @@ public static class NativeRedirect
             AppStorage.Log($"NativeRedirect: backup cleanup failed: {ex.Message}");
         }
         AppStorage.Log("NativeRedirect uninstalled.");
+    }
+
+    /// <summary>
+    /// Restore the Folder base-class verbs older builds hijacked. Runs on
+    /// startup so existing installs converge without the user re-tuning the
+    /// setting; it is a no-op unless such a patch (with its backup) exists.
+    /// </summary>
+    public static void RestoreBaseClassRedirect()
+    {
+        bool touched = false;
+        foreach (var verb in RestoredBaseVerbs)
+        {
+            touched |= UnpatchVerb(verb);
+        }
+        if (touched)
+        {
+            AppStorage.Log("NativeRedirect: restored Folder base-class verbs.");
+        }
     }
 
     private static void PatchVerb(string verbKeyPath, string commandLine)
@@ -120,8 +167,9 @@ public static class NativeRedirect
     }
 
     /// <summary>Runs in reverse order of PatchVerb: deepest keys first, so the
-    /// verb key can be deleted again once its command subkey is gone.</summary>
-    private static void UnpatchVerb(string verbKeyPath)
+    /// verb key can be deleted again once its command subkey is gone.
+    /// Returns true when anything was actually backed up and restored.</summary>
+    private static bool UnpatchVerb(string verbKeyPath)
     {
         bool touched = RestoreValue($@"{verbKeyPath}\command", null);
         touched |= RestoreValue($@"{verbKeyPath}\command", "DelegateExecute");
@@ -129,6 +177,7 @@ public static class NativeRedirect
         // Only trim when we actually had backups, so a spurious uninstall on a
         // clean machine never deletes anything.
         if (touched) TrimEmptyKeys($@"{verbKeyPath}\command");
+        return touched;
     }
 
     /// <summary>

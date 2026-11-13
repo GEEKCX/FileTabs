@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.IO;
 using System.IO.Pipes;
@@ -209,6 +210,9 @@ public partial class App : Application
         };
 
         MigrateLegacyAutostart();
+        // Older builds also redirected the Folder base class, which broke
+        // "show in folder" system-wide. Put those verbs back on startup.
+        NativeRedirect.RestoreBaseClassRedirect();
     }
 
     /// <summary>本次启动是否要求后台静默起来。</summary>
@@ -370,12 +374,15 @@ public partial class App : Application
         if (args.Length == 0) return;
         string path = NormalizeShellPath(args[0]);
         if (!Directory.Exists(path)) return;
+        string message = IsLaunchedByOwnShellView()
+            ? InstanceMessage.ForInPlaceNavigation(path)
+            : InstanceMessage.ForNewTab(path);
         try
         {
             using var client = new NamedPipeClientStream(".", PipeName, PipeDirection.Out);
             client.Connect(timeout: 1500);
             using var writer = new StreamWriter(client) { AutoFlush = true };
-            writer.WriteLine(path);
+            writer.WriteLine(message);
         }
         catch (Exception)
         {
@@ -385,6 +392,60 @@ public partial class App : Application
             // no user-visible benefit.
         }
     }
+
+    /// <summary>
+    /// The Explorer view hosted inside FileTabs activates a folder through the
+    /// shell, and the registry redirect turns that into a new FileTabs process.
+    /// When that happens the parent process is FileTabs itself: the user is
+    /// browsing inside a tab, not asking for another one, so the request must
+    /// navigate in place.
+    /// </summary>
+    private static bool IsLaunchedByOwnShellView()
+    {
+        int parentId = GetParentProcessId();
+        if (parentId <= 0) return false;
+        try
+        {
+            using var parent = Process.GetProcessById(parentId);
+            using var self = Process.GetCurrentProcess();
+            return string.Equals(
+                parent.ProcessName, self.ProcessName, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+            when (ex is ArgumentException or InvalidOperationException
+                or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static int GetParentProcessId()
+    {
+        using var self = Process.GetCurrentProcess();
+        var info = new ProcessBasicInformation();
+        int status = NtQueryInformationProcess(
+            self.Handle, 0, ref info, Marshal.SizeOf<ProcessBasicInformation>(), out _);
+        return status == 0 ? (int)info.InheritedFromUniqueProcessId : 0;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessBasicInformation
+    {
+        public IntPtr Reserved1;
+        public IntPtr PebBaseAddress;
+        public IntPtr Reserved2A;
+        public IntPtr Reserved2B;
+        public IntPtr UniqueProcessId;
+        public IntPtr InheritedFromUniqueProcessId;
+    }
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtQueryInformationProcess(
+        IntPtr processHandle,
+        int processInformationClass,
+        ref ProcessBasicInformation processInformation,
+        int processInformationLength,
+        out int returnLength);
 
     private async Task PipeServerLoopAsync(CancellationToken token)
     {
@@ -399,16 +460,23 @@ public partial class App : Application
                 await server.WaitForConnectionAsync(token);
                 using var reader = new StreamReader(server);
                 string? line = await reader.ReadLineAsync(token);
-                if (!string.IsNullOrEmpty(line))
+                if (InstanceMessage.TryParse(line, out var receivedPath, out var navigateInPlace))
                 {
-                    var path = NormalizeShellPath(line);
+                    var path = NormalizeShellPath(receivedPath);
                     if (Directory.Exists(path))
                     {
                         _ = Dispatcher.BeginInvoke(() =>
                         {
                             if (Current?.MainWindow is MainWindow main)
                             {
-                                main.OpenPathInNewTab(path);
+                                if (navigateInPlace)
+                                {
+                                    main.NavigateActiveTabInPlace(path);
+                                }
+                                else
+                                {
+                                    main.OpenPathInNewTab(path);
+                                }
                             }
                         });
                     }
