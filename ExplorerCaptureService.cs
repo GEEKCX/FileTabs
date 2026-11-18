@@ -131,6 +131,22 @@ public sealed class ExplorerCaptureService : IDisposable
                 _seenHwnds.TryRemove(captured, out _);
                 return;
             }
+
+            // Control Panel pages (Power Options and every other CPL) share
+            // CabinetWClass with Explorer but are not folder views: the tab
+            // built from their composite path shows a raw GUID instead of the
+            // page, so from the user's side the settings window "never
+            // opens". Give the window back instead of tabbing it. The seen
+            // entry stays on purpose: SW_SHOW below raises another SHOW
+            // event, and the entry is what stops that event from
+            // re-capturing the window in a hide/show loop.
+            if (IsControlPanelPath(path))
+            {
+                AppStorage.Log($"Capture gave back hwnd={captured} (control panel).");
+                _ = ShowWindow(new IntPtr(captured), SW_SHOW);
+                return;
+            }
+
             AppStorage.Log($"Captured hwnd={captured} path='{path}'.");
             NewExplorerWindow?.Invoke(captured, path);
         });
@@ -154,6 +170,18 @@ public sealed class ExplorerCaptureService : IDisposable
     {
         // High bit set = key currently down.
         return (GetAsyncKeyState(vk) & 0x8000) != 0;
+    }
+
+    /// <summary>
+    /// Control Panel items resolve to composite parsing names like
+    /// "::{26EE0668-...}\2\::{025A5937-...}" (root CLSID, category index,
+    /// item CLSID). The root GUID belongs to the Control Panel folder.
+    /// </summary>
+    public static bool IsControlPanelPath(string path)
+    {
+        return path != null &&
+               path.StartsWith("::{26EE0668-A00A-44D7-9371-BEB064C98683}",
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsExplorerWindow(IntPtr hwnd)

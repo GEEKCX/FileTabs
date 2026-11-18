@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace FileTabs;
 
@@ -22,19 +23,73 @@ internal static class Program
 
         if (args.Length > 0)
         {
+            // The redirect verbs accept --dry-run to preview without writing;
+            // detect it before the switch so verb and flag can appear in
+            // either order (Program.cs has no WPF object yet, so printing to
+            // the console here is safe).
+            bool redirectDryRun =
+                args.Contains("--dry-run", StringComparer.Ordinal);
             switch (args[0])
             {
                 case "--install-redirect":
-                    NativeRedirect.Install();
+                    if (redirectDryRun)
+                    {
+                        EnsureConsole();
+                        NativeRedirect.PreviewInstall();
+                    }
+                    else
+                    {
+                        NativeRedirect.Install();
+                    }
                     return 0;
                 case "--uninstall-redirect":
-                    NativeRedirect.Uninstall();
+                    if (redirectDryRun)
+                    {
+                        EnsureConsole();
+                        NativeRedirect.PreviewUninstall();
+                    }
+                    else
+                    {
+                        NativeRedirect.Uninstall();
+                    }
                     return 0;
+                // Benchmarks the filesystem paths that make the UI stall. It
+                // runs before WPF exists and returns without a message loop.
+                case "--bench":
+                    return BenchCommand.Run(args);
             }
         }
 
         var app = new App();
         app.InitializeComponent();
         return app.Run();
+    }
+
+    // A WinExe has no console of its own. Attach to the launching shell so
+    // the --* --dry-run previews can print to stdout (mirrors the approach
+    // BenchCommand.EnsureConsole uses for --bench); with output redirected to
+    // a file it still lands there because the process inherits that handle.
+    private const uint AttachParentProcess = 0xFFFFFFFF;
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AttachConsole(uint dwProcessId);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern IntPtr GetConsoleWindow();
+
+    private static void EnsureConsole()
+    {
+        try
+        {
+            if (GetConsoleWindow() == IntPtr.Zero)
+            {
+                if (!AttachConsole(AttachParentProcess)) { /* no console; fine */ }
+            }
+            Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+        }
+        catch (IOException)
+        {
+            // No usable console; output is simply unavailable.
+        }
     }
 }

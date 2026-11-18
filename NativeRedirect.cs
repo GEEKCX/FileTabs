@@ -142,6 +142,102 @@ public static class NativeRedirect
         }
     }
 
+    /// Dry-run for <see cref="Install"/>. Reads the current state and prints
+    /// exactly which keys and values Install would write, without touching a
+    /// single write API on HKCU\Software\Classes or the backup root. Pure
+    /// read-only: OpenSubKey / GetValue only. Callers printing to stdout
+    /// should attach a console first (see Program.EnsureConsole).
+    /// </summary>
+    public static void PreviewInstall()
+    {
+        string exe = Environment.ProcessPath ?? "<ProcessPath unavailable>";
+        Console.WriteLine("dry-run: FileTabs redirect install preview");
+        Console.WriteLine("no registry writes were performed.");
+        Console.WriteLine();
+        foreach (var verb in RedirectVerbs)
+        {
+            PrintPlannedWrite(verb, $"\"{exe}\" \"%1\"");
+        }
+        PrintPlannedWrite(WinEVerb, $"\"{exe}\"");
+        Console.WriteLine("dry-run: complete (nothing changed).");
+    }
+
+    /// <summary>
+    /// Dry-run for <see cref="Uninstall"/>. Reports whether a backup exists
+    /// and what each saved slot holds, read-only, so the caller can see what
+    /// an uninstall would restore without performing it.
+    /// </summary>
+    public static void PreviewUninstall()
+    {
+        Console.WriteLine("dry-run: FileTabs redirect uninstall preview");
+        Console.WriteLine("no registry writes were performed.");
+        Console.WriteLine();
+
+        using (var backup = Registry.CurrentUser.OpenSubKey(BackupRoot))
+        {
+            if (backup is null)
+            {
+                Console.WriteLine(
+                    $"no backup found under HKCU\\{BackupRoot}; " +
+                    "uninstall would restore nothing.");
+            }
+            else
+            {
+                Console.WriteLine($"backup located at HKCU\\{BackupRoot}, " +
+                                  $"with the following saved slots:");
+                foreach (string slot in backup.GetSubKeyNames())
+                {
+                    using var slotKey = backup.OpenSubKey(slot);
+                    string state = slotKey?.GetValue("state") as string
+                        ?? "unknown";
+                    string data = slotKey?.GetValue("data")?.ToString() ?? "";
+                    Console.WriteLine($"  {slot,-70} state={state}" +
+                                      (data.Length == 0 ? "" : $", data={data}"));
+                }
+            }
+        }
+
+        Console.WriteLine("dry-run: complete (nothing changed).");
+    }
+
+    /// <summary>Prints one key's current values and what Install would set
+    /// them to, for the given verb's command subkey.</summary>
+    private static void PrintPlannedWrite(string verbKeyPath, string commandLine)
+    {
+        string commandKeyPath = $@"{verbKeyPath}\command";
+        Console.WriteLine($"HKCU\\{commandKeyPath}");
+        PrintPlannedValue(commandKeyPath, null, commandLine);
+        PrintPlannedValue(commandKeyPath, "DelegateExecute", string.Empty);
+        // Install also deletes a stale verb-level DelegateExecute when it is
+        // an empty string; show it so the plan is honest about that too.
+        using (var verb = Registry.CurrentUser.OpenSubKey(verbKeyPath))
+        {
+            if (verb?.GetValue("DelegateExecute") is string { Length: 0 })
+            {
+                Console.WriteLine(
+                    $"  (would delete empty DelegateExecute on HKCU\\{verbKeyPath})");
+            }
+        }
+        Console.WriteLine();
+    }
+
+    /// <summary>Prints one value's current content and what would be written.
+    /// Read-only: OpenSubKey without write access.</summary>
+    private static void PrintPlannedValue(string keyPath, string? valueName,
+        string plannedValue)
+    {
+        string display = valueName is null ? "(default)" : valueName;
+        using var key = Registry.CurrentUser.OpenSubKey(keyPath);
+        object? current = key?.GetValue(valueName);
+        string currentText = current switch
+        {
+            null => "<not present>",
+            string s => $"\"{s}\"",
+            _ => $"\"{current}\"",
+        };
+        Console.WriteLine($"  {display,-16} {currentText,-40} =>  {plannedValue}");
+    }
+
     private static void PatchVerb(string verbKeyPath, string commandLine)
     {
         string commandKeyPath = $@"{verbKeyPath}\command";

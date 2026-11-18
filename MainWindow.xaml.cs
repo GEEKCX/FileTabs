@@ -1650,25 +1650,41 @@ public partial class MainWindow : FluentWindow
 
     private bool CanModifyCurrentFolder() => CurrentFolderPath() is not null;
 
-    private void NewFolderButton_Click(object sender, RoutedEventArgs e)
+    // 重名探测是同步 IO：网络盘或离线 UNC 上每次 Exists 都可能等网络超时，
+    // 所以放进后台线程。守卫保证连点时只有一个探测在跑，不会并发建重名目录。
+    private bool _newFolderInProgress;
+
+    private async void NewFolderButton_Click(object sender, RoutedEventArgs e)
     {
         var folder = CurrentFolderPath();
-        if (folder is null) return;
+        if (folder is null || _newFolderInProgress) return;
+        _newFolderInProgress = true;
+        NewFolderButton.IsEnabled = false;
         try
         {
-            var name = "新建文件夹";
-            var candidate = Path.Combine(folder, name);
-            for (var suffix = 2; Directory.Exists(candidate) || File.Exists(candidate); suffix++)
+            await Task.Run(() => NewFolderProbe.CreateNewFolder(folder));
+            // The folder now exists; autocomplete must not keep serving the
+            // listing it cached a moment before the creation.
+            DirectoryListingCache.Invalidate(folder);
+            if (!_isClosing)
             {
-                candidate = Path.Combine(folder, $"{name} ({suffix})");
+                _active?.Browser?.Navigate(ShellObject.FromParsingName(folder));
             }
-            Directory.CreateDirectory(candidate);
-            _active?.Browser?.Navigate(ShellObject.FromParsingName(folder));
+        }
+        catch (InvalidOperationException ex)
+        {
+            MessageBox.Show(this, ex.Message, "无法新建文件夹",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             MessageBox.Show(this, ex.Message, "无法新建文件夹",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            _newFolderInProgress = false;
+            NewFolderButton.IsEnabled = CanModifyCurrentFolder();
         }
     }
 
@@ -1835,9 +1851,10 @@ public partial class MainWindow : FluentWindow
         {
             operation();
             // Copy/move/delete/rename change folder contents; drop cached
-            // sizes so the status bar recomputes instead of showing stale
-            // numbers until the TTL lapses.
+            // sizes and listings so the status bar and address autocomplete
+            // recompute instead of showing stale data until the TTL lapses.
             FolderSizeCache.Invalidate(null);
+            DirectoryListingCache.Invalidate(null);
         }
         catch (OperationCanceledException)
         {
@@ -3607,27 +3624,14 @@ public partial class MainWindow : FluentWindow
 
     private sealed record AddressSuggestion(string Name, string Path, bool IsFolder);
 
-    private sealed record AddressDirectoryEntry(string FullName, string Name, bool IsFolder);
-
-    private sealed record AddressDirectoryCacheEntry(
-        long CreatedAt, IReadOnlyList<AddressDirectoryEntry> Entries);
-
     private const int MaxAddressSuggestions = 14;
     // Suggestions are best-effort: stop scanning unusually large folders
     // instead of stalling the background task on every keystroke.
     private const int MaxAddressDirectoryScan = 5000;
     private const long MaxAddressScanMilliseconds = 150;
-    // Reuse a directory listing across keystrokes; autocomplete tolerates a
-    // few seconds of staleness, and the same parent is scanned repeatedly
-    // while the user narrows a name. Oversized listings are not cached so a
-    // handful of huge folders cannot pin a large amount of memory.
-    private const int AddressDirectoryCacheLimit = 8;
-    private const int AddressDirectoryCacheMaxEntries = 1000;
-    private static readonly long AddressDirectoryCacheLifetimeMs =
-        (long)TimeSpan.FromSeconds(4).TotalMilliseconds;
-    private static readonly object AddressDirectoryCacheGate = new();
-    private static readonly Dictionary<string, AddressDirectoryCacheEntry> AddressDirectoryCache =
-        new(StringComparer.OrdinalIgnoreCase);
+    // Listings are reused across keystrokes by DirectoryListingCache, which
+    // expires them after a few seconds. Oversized scans are reported as
+    // incomplete so a capped listing is never cached as the whole folder.
 
     private void QueueAddressSuggestions(bool immediate = false)
     {
@@ -3817,7 +3821,7 @@ public partial class MainWindow : FluentWindow
         }
     }
 
-    private static IReadOnlyList<AddressDirectoryEntry> GetAddressDirectoryEntries(
+    private static IReadOnlyList<DirectoryListingEntry> GetAddressDirectoryEntries(
         string directory, CancellationToken token)
     {
         string key;
@@ -3830,17 +3834,19 @@ public partial class MainWindow : FluentWindow
             key = directory;
         }
 
-        var now = Environment.TickCount64;
-        lock (AddressDirectoryCacheGate)
-        {
-            if (AddressDirectoryCache.TryGetValue(key, out var cached)
-                && now - cached.CreatedAt <= AddressDirectoryCacheLifetimeMs)
-            {
-                return cached.Entries;
-            }
-        }
+        // GetOrScan reuses a fresh listing across keystrokes and coalesces
+        // concurrent scans of the same parent; incomplete scans are returned
+        // to this caller but never stored for the next one.
+        return DirectoryListingCache.GetOrScan(
+            key, () => ScanAddressDirectory(directory, token)).Entries;
+    }
 
-        var entries = new List<AddressDirectoryEntry>();
+    private static DirectoryListingScan ScanAddressDirectory(
+        string directory, CancellationToken token)
+    {
+        ThreadGuard.AssertBackground(nameof(ScanAddressDirectory));
+
+        var entries = new List<DirectoryListingEntry>();
         // A capped scan must not be cached as if it were the full listing:
         // an entry past the cutoff would then stay invisible for the cache
         // lifetime, and every rescan would stop at the same place.
@@ -3864,7 +3870,7 @@ public partial class MainWindow : FluentWindow
                     truncated = true;
                     break;
                 }
-                entries.Add(new AddressDirectoryEntry(
+                entries.Add(new DirectoryListingEntry(
                     info.FullName, info.Name, info is DirectoryInfo));
             }
         }
@@ -3880,21 +3886,7 @@ public partial class MainWindow : FluentWindow
             truncated = true;
         }
 
-        if (!truncated && entries.Count <= AddressDirectoryCacheMaxEntries)
-        {
-            lock (AddressDirectoryCacheGate)
-            {
-                if (AddressDirectoryCache.Count >= AddressDirectoryCacheLimit)
-                {
-                    var oldestKey = AddressDirectoryCache
-                        .OrderBy(pair => pair.Value.CreatedAt)
-                        .First().Key;
-                    AddressDirectoryCache.Remove(oldestKey);
-                }
-                AddressDirectoryCache[key] = new AddressDirectoryCacheEntry(now, entries);
-            }
-        }
-        return entries;
+        return new DirectoryListingScan(entries, Complete: !truncated);
     }
 
     private static bool EndsWithDirectorySeparator(string path)

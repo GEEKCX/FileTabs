@@ -77,6 +77,42 @@ dotnet test tests/FileTabs.Tests/FileTabs.Tests.csproj
 
 Everything 集成走官方 [Everything SDK](https://www.voidtools.com/forum/viewtopic.php?t=30541)（`Everything64.dll`，MIT 协议），Windows 上能正常调用 Everything 的 IPC。
 
+## 性能基准
+
+运行 `FileTabs.exe --bench` 做一轮 quick 模式基准，度量让界面感觉卡顿的几条文件系统路径。下面的 `setup` 是造测试数据的时间，`measure` 列（`mean`/`p50`/`p95`/`min`/`max`）才是被采样操作本身的耗时 —— 两者必须分开看：`setup` 大只说明被测磁盘造数据慢，不代表操作本身慢。本例跑在下面这台机器上。
+
+**测试机**：13th Gen Intel Core i7-13700（16 核 24 线程）· 31.8 GB 内存 · Microsoft Windows 11 专业版 10.0.26200 版本 26200
+
+输出（quick 模式，默认）：
+
+```text
+[1/5] dir_enum_10k ...
+[1/5] dir_enum_10k ... done (setup 3883ms, measure 4ms)
+[2/5] dir_enum_10k_cached ...
+[2/5] dir_enum_10k_cached ... done (setup 0ms, measure 0ms)
+[3/5] folder_size_200 ...
+[3/5] folder_size_200 ... done (setup 374ms, measure 19ms)
+[4/5] newfolder_collision_100 ...
+[4/5] newfolder_collision_100 ... done (setup 54ms, measure 8ms)
+[5/5] fs_meta_stat_5k ...
+[5/5] fs_meta_stat_5k ... done (setup 1869ms, measure 371ms)
+FileTabs benchmark  (1.3.1, win-x64, mode=quick, 2026-11-18 20:37:18)
+------------------------------------------------------------------------
+item                         setup     mean      p50      p95      min      max
+dir_enum_10k              3883.0ms    4.2ms    4.3ms    6.1ms    3.0ms    6.1ms
+dir_enum_10k_cached          0.0ms    0.0ms    0.0ms    0.2ms    0.0ms    0.2ms
+                        note: 10,000 条列表命中缓存
+folder_size_200            374.0ms   18.8ms   18.4ms   20.9ms   17.9ms   20.9ms
+newfolder_collision_100     53.9ms    7.6ms    7.4ms    8.5ms    7.2ms    8.5ms
+fs_meta_stat_5k           1868.9ms  371.2ms  378.5ms  392.6ms  344.4ms  392.6ms
+```
+
+- **quick 是默认**；加 `--bench --full` 跑全量（更多样本、更长超时，等得起的机器上更稳）。
+- **为什么 `setup` 和 `measure` 分开**：造数据（在临时目录写一万个文件、建两百层目录树）是环境成本，不是被测代码的耗时；把它单独列出来，你就能一眼看出「这台机器慢在磁盘」还是「慢在操作本身」。
+- **你的数字会不同**：受磁盘速度、杀毒软件、后台负载和 CPU 型号影响，列出的均值/分位数会和这台机器有出入，属正常现象。只要数量级相近、`setup` 明显大于对应操作的均值，就是健康的。
+
+项目采用 [MIT 许可](./LICENSE)，详情见仓库内 LICENSE 文件。
+
 ## 致谢
 
 - [Windows API Code Pack](https://github.com/aybe/Windows-API-Code-Pack-1.1) — ExplorerBrowser 封装

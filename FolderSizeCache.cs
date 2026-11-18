@@ -21,6 +21,11 @@ public static class FolderSizeCache
     // bar falls back to counting items only.
     private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(30);
 
+    // Long sessions touch an unbounded set of folders; keep the cache from
+    // growing forever. Oldest entries go first, the same simple policy
+    // DirectoryListingCache uses.
+    private const int Capacity = 2000;
+
     /// <summary>Number of folders currently being computed.</summary>
     public static int PendingCount => Pending.Count;
 
@@ -57,7 +62,7 @@ public static class FolderSizeCache
             try
             {
                 var size = ComputeSize(folder);
-                Cache[folder] = new Entry(size, DateTimeOffset.UtcNow);
+                Store(folder, size);
             }
             catch (Exception ex) when (ex is IOException
                 or UnauthorizedAccessException
@@ -65,7 +70,7 @@ public static class FolderSizeCache
             {
                 // Inaccessible subtree: cache a "known unknown" so we do not
                 // hammer the same denied folder every status refresh.
-                Cache[folder] = new Entry(-1, DateTimeOffset.UtcNow);
+                Store(folder, -1);
             }
             finally
             {
@@ -88,6 +93,35 @@ public static class FolderSizeCache
         Cache.TryRemove(folder, out _);
     }
 
+    private static void Store(string folder, long bytes)
+    {
+        TrimCache();
+        Cache[folder] = new Entry(bytes, DateTimeOffset.UtcNow);
+    }
+
+    private static void TrimCache()
+    {
+        if (Cache.Count < Capacity) return;
+
+        // Expired entries cost nothing to drop and usually free the slot.
+        var now = DateTimeOffset.UtcNow;
+        foreach (var pair in Cache)
+        {
+            if (now - pair.Value.ComputedAt >= Ttl)
+            {
+                Cache.TryRemove(new KeyValuePair<string, Entry>(pair.Key, pair.Value));
+            }
+        }
+        if (Cache.Count < Capacity) return;
+
+        // The TryRemove result guards against a concurrent Invalidate(null)
+        // emptying the dictionary between the Count check and the removal.
+        foreach (var pair in Cache.OrderBy(pair => pair.Value.ComputedAt))
+        {
+            if (Cache.TryRemove(pair.Key, out _)) break;
+        }
+    }
+
     private static bool CanCompute(string folder)
     {
         if (Cache.TryGetValue(folder, out var entry) &&
@@ -100,8 +134,9 @@ public static class FolderSizeCache
         return !folder.StartsWith(@"\\", StringComparison.Ordinal);
     }
 
-    private static long ComputeSize(string folder)
+    internal static long ComputeSize(string folder)
     {
+        ThreadGuard.AssertBackground(nameof(ComputeSize));
         // EnumerationOptions with RecurseSubdirectories skips the manual
         // recursion stack and respects attributes we do not need to re-check.
         var options = new EnumerationOptions
